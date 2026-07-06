@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#071527">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>World Cup Striker</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚽</text></svg>">
+<style>
+  :root{
+    --gold:#ffd75e;
+    --green:#3ddc84;
+    --red:#ff5d5d;
+    --ink:#eaf4ff;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none}
+  html,body{height:100%;overflow:hidden;background:#071527;touch-action:none;overscroll-behavior:none}
+  body{font-family:-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;color:var(--ink)}
+  #game{position:fixed;inset:0}
+  #game canvas{display:block}
+
+  .overlay{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:max(16px,env(safe-area-inset-top)) 20px max(24px,env(safe-area-inset-bottom));text-align:center;z-index:10}
+  .hidden{display:none !important}
+  .dim{background:linear-gradient(180deg,rgba(4,12,24,.88),rgba(4,12,24,.72) 40%,rgba(4,12,24,.9))}
+
+  .kicker{font-size:13px;letter-spacing:.35em;text-transform:uppercase;color:var(--gold);font-weight:700}
+  h1.logo{font-size:clamp(38px,11vw,64px);line-height:.95;font-weight:900;font-style:italic;letter-spacing:-.02em;
+    background:linear-gradient(180deg,#fff 30%,#ffd75e 75%,#f4a028);-webkit-background-clip:text;background-clip:text;
+    -webkit-text-fill-color:transparent;filter:drop-shadow(0 4px 14px rgba(255,190,40,.35));margin:10px 0 4px}
+  .sub{font-size:14px;opacity:.75;margin-bottom:26px}
+
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;width:min(92vw,420px)}
+  .team{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);border-radius:16px;
+    padding:12px 4px 10px;cursor:pointer;transition:transform .08s ease,background .15s}
+  .team:active{transform:scale(.93);background:rgba(255,255,255,.18)}
+  .team .flag{font-size:34px;line-height:1.1;display:block}
+  .team .name{font-size:11.5px;font-weight:700;letter-spacing:.04em;opacity:.9}
+
+  /* HUD */
+  #hud{position:fixed;left:0;right:0;top:0;z-index:8;display:flex;flex-direction:column;align-items:center;
+    padding-top:max(10px,env(safe-area-inset-top));pointer-events:none}
+  #stage-label{font-size:11px;font-weight:800;letter-spacing:.3em;text-transform:uppercase;color:var(--gold);
+    text-shadow:0 1px 6px rgba(0,0,0,.6);margin-bottom:6px}
+  #scoreboard{display:flex;align-items:center;gap:14px;background:rgba(5,14,28,.72);border:1px solid rgba(255,255,255,.12);
+    border-radius:999px;padding:8px 18px;backdrop-filter:blur(6px)}
+  .sb-team{display:flex;align-items:center;gap:8px}
+  .sb-flag{font-size:22px}
+  .sb-score{font-size:22px;font-weight:900;min-width:18px}
+  .sb-dots{display:flex;gap:4px}
+  .dot{width:9px;height:9px;border-radius:50%;background:rgba(255,255,255,.22)}
+  .dot.goal{background:var(--green);box-shadow:0 0 6px var(--green)}
+  .dot.miss{background:var(--red)}
+  .sb-mid{font-size:12px;font-weight:800;opacity:.55}
+
+  /* banner */
+  #banner{position:fixed;left:0;right:0;top:34%;text-align:center;z-index:9;pointer-events:none;
+    font-size:clamp(40px,13vw,84px);font-weight:900;font-style:italic;letter-spacing:-.02em;
+    text-shadow:0 6px 26px rgba(0,0,0,.7);opacity:0;transform:scale(.6)}
+  #banner.show{animation:pop .45s cubic-bezier(.2,1.6,.4,1) forwards}
+  #banner.goal{color:var(--green)}
+  #banner.bad{color:var(--red)}
+  #banner.neutral{color:#fff}
+  @keyframes pop{to{opacity:1;transform:scale(1)}}
+
+  #subbanner{position:fixed;left:0;right:0;top:47%;text-align:center;z-index:9;pointer-events:none;
+    font-size:15px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;opacity:0;transition:opacity .25s}
+  #subbanner.show{opacity:.85}
+
+  /* opponent kick overlay */
+  #opp-overlay{position:fixed;left:0;right:0;bottom:18%;z-index:9;display:flex;justify-content:center;pointer-events:none}
+  #opp-card{background:rgba(5,14,28,.85);border:1px solid rgba(255,255,255,.15);border-radius:18px;
+    padding:14px 26px;font-size:17px;font-weight:800;letter-spacing:.02em;opacity:0;transform:translateY(14px);
+    transition:opacity .25s,transform .25s}
+  #opp-overlay.show #opp-card{opacity:1;transform:translateY(0)}
+
+  /* swipe hint */
+  #hint{position:fixed;left:0;right:0;bottom:16%;z-index:7;display:flex;flex-direction:column;align-items:center;
+    gap:6px;pointer-events:none}
+  #hint .arrow{font-size:44px;animation:swipeUp 1.3s ease-in-out infinite}
+  #hint .txt{font-size:14px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;opacity:.9;
+    text-shadow:0 1px 8px rgba(0,0,0,.8)}
+  @keyframes swipeUp{0%{transform:translateY(26px);opacity:0}30%{opacity:1}70%{transform:translateY(-26px);opacity:1}100%{transform:translateY(-40px);opacity:0}}
+
+  /* end screens */
+  .big-emoji{font-size:74px;margin-bottom:8px;filter:drop-shadow(0 6px 18px rgba(0,0,0,.5))}
+  h2.result{font-size:clamp(34px,10vw,56px);font-weight:900;font-style:italic;margin:4px 0 6px}
+  h2.result.win{color:var(--gold)}
+  h2.result.lose{color:var(--red)}
+  .detail{font-size:16px;opacity:.85;margin-bottom:30px;font-weight:600}
+  .btn{pointer-events:auto;cursor:pointer;border:none;border-radius:999px;padding:16px 44px;font-size:17px;font-weight:900;
+    letter-spacing:.08em;text-transform:uppercase;color:#08131f;background:linear-gradient(180deg,#ffe89a,#ffc63a);
+    box-shadow:0 6px 22px rgba(255,190,40,.35),inset 0 1px 0 rgba(255,255,255,.7);margin:6px 0;
+    transition:transform .08s}
+  .btn:active{transform:scale(.94)}
+  .btn.ghost{background:rgba(255,255,255,.1);color:var(--ink);box-shadow:none;border:1px solid rgba(255,255,255,.25)}
+
+  /* vs screen */
+  #vs-row{display:flex;align-items:center;gap:26px;margin:18px 0 8px}
+  .vs-team{display:flex;flex-direction:column;align-items:center;gap:6px}
+  .vs-flag{font-size:58px;filter:drop-shadow(0 5px 14px rgba(0,0,0,.5))}
+  .vs-name{font-size:14px;font-weight:800;letter-spacing:.06em}
+  #vs-x{font-size:26px;font-weight:900;color:var(--gold);font-style:italic}
+  .tap-note{margin-top:34px;font-size:13px;letter-spacing:.28em;text-transform:uppercase;opacity:.7;
+    animation:blink 1.4s ease-in-out infinite}
+  @keyframes blink{50%{opacity:.25}}
+
+  #vignette{position:fixed;inset:0;pointer-events:none;z-index:5;
+    background:radial-gradient(ellipse at 50% 42%,transparent 55%,rgba(0,0,0,.42))}
+</style>
+</head>
+<body>
+<div id="game"></div>
+<div id="vignette"></div>
+
+<!-- HUD -->
+<div id="hud" class="hidden">
+  <div id="stage-label">QUARTERFINAL</div>
+  <div id="scoreboard">
+    <div class="sb-team">
+      <span class="sb-flag" id="sb-pflag">🇧🇷</span>
+      <span class="sb-score" id="sb-pscore">0</span>
+      <span class="sb-dots" id="sb-pdots"></span>
+    </div>
+    <span class="sb-mid">VS</span>
+    <div class="sb-team">
+      <span class="sb-dots" id="sb-odots"></span>
+      <span class="sb-score" id="sb-oscore">0</span>
+      <span class="sb-flag" id="sb-oflag">🇩🇪</span>
+    </div>
+  </div>
+</div>
+
+<div id="banner"></div>
+<div id="subbanner"></div>
+
+<div id="opp-overlay" class="hidden"><div id="opp-card"></div></div>
+
+<div id="hint" class="hidden">
+  <div class="arrow">👆</div>
+  <div class="txt">Swipe to shoot</div>
+</div>
+
+<!-- Title / team select -->
+<div id="title-screen" class="overlay dim">
+  <div class="kicker">⚽ Penalty Shootout</div>
+  <h1 class="logo">WORLD CUP<br>STRIKER</h1>
+  <div class="sub">Pick your nation. Win the cup.</div>
+  <div class="grid" id="team-grid"></div>
+</div>
+
+<!-- VS screen -->
+<div id="vs-screen" class="overlay dim hidden">
+  <div class="kicker" id="vs-stage">Quarterfinal</div>
+  <div id="vs-row">
+    <div class="vs-team"><div class="vs-flag" id="vs-pflag">🇧🇷</div><div class="vs-name" id="vs-pname">BRAZIL</div></div>
+    <div id="vs-x">VS</div>
+    <div class="vs-team"><div class="vs-flag" id="vs-oflag">🇩🇪</div><div class="vs-name" id="vs-oname">GERMANY</div></div>
+  </div>
+  <div class="tap-note">Tap to kick off</div>
+</div>
+
+<!-- End of match -->
+<div id="end-screen" class="overlay dim hidden">
+  <div class="big-emoji" id="end-emoji">🏆</div>
+  <h2 class="result win" id="end-title">CHAMPIONS!</h2>
+  <div class="detail" id="end-detail"></div>
+  <button class="btn" id="end-primary">Continue</button>
+  <button class="btn ghost" id="end-secondary">Main menu</button>
+</div>
+
+<script src="lib/three.min.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
