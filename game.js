@@ -424,12 +424,14 @@ const keeper = (function () {
     group, arms,
     jerseyMat: jersey,
     dive: null,             // {type:'dive'|'stand'|'jump', side, targetY, start, dur, bx}
-    baseX: 0,               // player-controlled shuffle position along the goal line
-    playerControlled: false, // true while YOU are the keeper: follow baseX instead of idle sway
+    baseX: 0,               // kept at 0 in lean control; dives launch from center
+    lean: 0,                // player-controlled body lean, world units (-1 .. 1)
+    playerControlled: false, // true while YOU are the keeper: lean with the finger instead of idle sway
     idleT: 0,
     reset() {
       this.dive = null;
       this.baseX = 0;
+      this.lean = 0;
       group.position.set(0, 0, 0.25);
       group.rotation.set(0, 0, 0);
       arms[0].rotation.z = -0.5;
@@ -492,9 +494,11 @@ const keeper = (function () {
         arms[d.side > 0 ? 1 : 0].rotation.z = d.side * lerp(0.5, 2.6, e);
         arms[d.side > 0 ? 0 : 1].rotation.z = -d.side * lerp(0.5, 1.4, e);
       } else if (this.playerControlled) {
-        // you are the keeper: shuffle toward your finger, quick and snappy
-        group.position.x = lerp(group.position.x, this.baseX, Math.min(1, dt * 18));
-        group.position.y = Math.abs(Math.sin(group.position.x * 4)) * 0.02;
+        // you are the keeper: the body leans with your finger, coiled to spring
+        const k = Math.min(1, dt * 14);
+        group.position.x = lerp(group.position.x, this.lean * 0.55, k);
+        group.rotation.z = lerp(group.rotation.z, -this.lean * 0.38, k);
+        group.position.y = Math.abs(this.lean) * 0.04;
       } else {
         // AI idle: sway side to side, tiny bounce
         this.idleT += dt;
@@ -742,6 +746,7 @@ const G = {
 
 let camShake = 0;
 let camPush = 0;
+let camBack = 0; // keeper cam: smoothed pull-back during the dive/shot
 
 // ---------------------------------------------------------------- UI helpers
 const bannerEl = el('banner'), subEl = el('subbanner');
@@ -836,19 +841,11 @@ function aimFromSwipe() {
 
 const canDive = () => (G.state === 'defend' || G.state === 'defend-ready') && !keeper.dive;
 
-// keeper cam faces the pitch, so screen-left is world +x
-const SHUFFLE_RANGE = 3.2;
-const screenToKeeperX = fx => clamp(-((fx / window.innerWidth) * 2 - 1) * 3.5, -SHUFFLE_RANGE, SHUFFLE_RANGE);
-
-// release-flick velocity over the last ~90ms of the gesture, px/ms (vy > 0 = upward)
-function flickOf(pts) {
-  const last = pts[pts.length - 1];
-  let i = pts.length - 1;
-  while (i > 0 && last.t - pts[i - 1].t < 90) i--;
-  const a = pts[i];
-  const dt = Math.max(1, last.t - a.t);
-  return { vx: (last.x - a.x) / dt, vy: (a.y - last.y) / dt };
-}
+// lean control: finger offset from where you pressed, normalized.
+// The keeper cam faces the pitch, so a finger moved screen-right leans the keeper
+// toward the player's right, which is world -x.
+const leanOf = (first, cur) => clamp(-(cur.x - first.x) / (window.innerWidth * 0.35), -1, 1);
+const liftOf = (first, cur) => clamp((first.y - cur.y) / (window.innerHeight * 0.22), 0, 1.2);
 
 function onPointerDown(e) {
   if (swipe.active) return;
@@ -856,14 +853,13 @@ function onPointerDown(e) {
   swipe.active = true;
   swipe.id = e.pointerId;
   swipe.points = [{ x: e.clientX, y: e.clientY, t: performance.now() }];
-  if (canDive()) keeper.baseX = screenToKeeperX(e.clientX); // grab the keeper right away
 }
 function onPointerMove(e) {
   if (!swipe.active || e.pointerId !== swipe.id) return;
   swipe.points.push({ x: e.clientX, y: e.clientY, t: performance.now() });
   if (swipe.points.length > 64) swipe.points.shift();
-  if (canDive()) { // dragging shuffles the keeper along the line in real time
-    keeper.baseX = screenToKeeperX(e.clientX);
+  if (canDive()) { // holding: the keeper leans with your finger
+    keeper.lean = leanOf(swipe.points[0], { x: e.clientX, y: e.clientY });
     return;
   }
   if (G.state !== 'await') return;
@@ -885,16 +881,18 @@ function onPointerUp(e) {
   } else if (canDive() && pts.length >= 1) {
     G.firstDiveTaken = true;
     el('hint').classList.add('hidden');
-    const { vx, vy } = flickOf(pts);
-    const speed = Math.hypot(vx, vy);
-    if (speed < 0.25) return; // gentle release: stay on your feet where you stand
+    const first = pts[0], last = pts[pts.length - 1];
+    const lean = leanOf(first, last);   // which way you're committed
+    const lift = liftOf(first, last);   // how high you pushed the dive
+    keeper.lean = 0;
     vibrate(20);
-    if (vy > 0.3 && vy > Math.abs(vx) * 1.3) {
-      keeper.startJump(0.34); // flick straight up: leap for the high ball
+    if (Math.abs(lean) >= 0.15) {
+      // spring off the lean: dive that way, higher finger = higher dive
+      keeper.startDive(Math.sign(lean), clamp(0.5 + lift * 1.9, 0.4, 2.35), 0.34);
+    } else if (lift > 0.3) {
+      keeper.startJump(0.34); // straight up for the high ball
     } else {
-      const side = vx < 0 ? 1 : -1; // flick sideways: dive from where you shuffled to
-      const targetY = clamp(0.6 + vy * 2.2, 0.4, 2.3);
-      keeper.startDive(side, targetY, 0.34);
+      keeper.startDive(0, 1.0, 0.3); // stand tall in the middle
     }
   }
 }
@@ -990,9 +988,9 @@ function aiAim() {
   return { target: new THREE.Vector3(x, y, 0), power, curve: rand(-0.55, 0.55) };
 }
 
-// with direct positioning the player is far more capable, so the reach bonus is modest
-const PLAYER_REACH = 1.12;
-const PLAYER_RADIUS = 0.08;
+// lean control commits you to a side like a real keeper, so the gloves get generous reach
+const PLAYER_REACH = 1.25;
+const PLAYER_RADIUS = 0.15;
 
 function aiKick() {
   const myShot = ++shotSeq;
@@ -1017,7 +1015,7 @@ async function defendRound(token) {
   swipe.active = false; // discard any gesture that started before this round
   G.state = 'defend-ready';
   if (!G.firstDiveTaken) {
-    el('hint').querySelector('.txt').textContent = 'Drag to move · flick to dive · flick up to jump';
+    el('hint').querySelector('.txt').textContent = 'Hold & lean, release to dive · push up to jump';
     el('hint').classList.remove('hidden');
   }
   await sleep(rand(600, 1300));
@@ -1080,7 +1078,7 @@ async function runMatch(token) {
   striker.jerseyMat.color.set(G.oppTeam.color === 0xffffff ? G.oppTeam.alt : G.oppTeam.color);
   const shooter = keeperMode ? G.oppTeam : G.playerTeam;
   trail.material.color.set(shooter.color === 0xffffff ? shooter.alt : shooter.color);
-  setNetOpacity(keeperMode ? 0.35 : 1); // the keeper cam looks through the net — keep it subtle
+  setNetOpacity(1); // the tight keeper cam sits above the net drape, so keep it fully visible
   AudioFX.whistle();
 
   while (alive()) {
@@ -1295,7 +1293,7 @@ function startTournament(mode) {
 function camBase() {
   const squeeze = camera.aspect < 0.62 ? (0.62 - camera.aspect) : 0;
   return G.mode === 'keeper'
-    ? new THREE.Vector3(0, 4.6, -12 - squeeze * 6) // high behind the goal: full frame + both posts in view
+    ? new THREE.Vector3(0, 3.6, -7.4 - squeeze * 3) // tight behind the net: ~65% of the goal during the buildup
     : new THREE.Vector3(0, 2.3, SPOT_Z + 4.6 + squeeze * 6);
 }
 
@@ -1337,10 +1335,20 @@ function frame() {
   camShake = Math.max(0, camShake - dt * 2.2);
   const base = camBase();
   const keeperCam = G.mode === 'keeper';
-  const followX = Ball.flying ? Ball.pos.x * (keeperCam ? 0.12 : 0.18) : 0;
+  let followX;
+  if (keeperCam) {
+    // pan with the keeper's lean and dive, plus a touch of ball tracking
+    followX = keeper.group.position.x * 0.75 + (Ball.flying ? Ball.pos.x * 0.1 : 0);
+    // pull back the moment the action explodes so the whole goal is in frame
+    const backTarget = (keeper.dive || Ball.flying) ? 4.4 : 0;
+    camBack = lerp(camBack, backTarget, Math.min(1, dt * 5));
+  } else {
+    followX = Ball.flying ? Ball.pos.x * 0.18 : 0;
+    camBack = 0;
+  }
   camera.position.x = lerp(camera.position.x, followX + (Math.random() - 0.5) * camShake * 0.3, 0.12);
   camera.position.y = base.y + (Math.random() - 0.5) * camShake * 0.25;
-  camera.position.z = lerp(camera.position.z, base.z + (keeperCam ? 0 : -camPush * 1.4), 0.09);
+  camera.position.z = lerp(camera.position.z, base.z + (keeperCam ? -camBack : -camPush * 1.4), 0.09);
   camLook.set(
     lerp(camLook.x, Ball.flying ? Ball.pos.x * 0.35 : 0, 0.1),
     lerp(camLook.y, Ball.flying ? clamp(Ball.pos.y * 0.5 + 0.9, keeperCam ? 0.7 : 1.1, 1.9) : (keeperCam ? 0.8 : 1.4), 0.1),
