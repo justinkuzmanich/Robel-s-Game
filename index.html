@@ -109,28 +109,13 @@
   @keyframes blink{50%{opacity:.25}}
 
   /* mode select */
-  #mode-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;width:min(90vw,400px);margin-top:18px}
+  #mode-row{display:flex;flex-direction:column;gap:16px;width:min(88vw,360px);margin-top:18px}
   .mode-card{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.16);border-radius:22px;
-    padding:18px 12px;cursor:pointer;transition:transform .08s ease,background .15s;text-align:center}
+    padding:22px 18px;cursor:pointer;transition:transform .08s ease,background .15s;text-align:center}
   .mode-card:active{transform:scale(.95);background:rgba(255,255,255,.18)}
-  .mode-card .mc-emoji{font-size:38px;display:block;margin-bottom:6px}
-  .mc-title{font-size:16px;font-weight:900;font-style:italic;letter-spacing:.05em;margin-bottom:4px}
-  .mc-sub{font-size:12px;opacity:.75;font-weight:600}
-
-  /* pass & play zone pick */
-  #zone-grid{display:grid;grid-template-columns:repeat(3,84px);grid-template-rows:repeat(2,72px);gap:10px;margin-top:22px}
-  .zone{border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.08);border-radius:16px;
-    font-size:30px;color:var(--ink);cursor:pointer;transition:transform .08s}
-  .zone:active{transform:scale(.9);background:rgba(255,215,94,.35)}
-  .zone-mid{grid-row:span 2}
-
-  /* split-screen divider */
-  #split-divider{position:fixed;inset:0;pointer-events:none;z-index:6}
-  #sd-line{position:absolute;left:0;right:0;top:45%;border-top:2px dashed rgba(255,255,255,.4)}
-  .sd-tag{position:absolute;left:12px;background:rgba(5,14,28,.75);border:1px solid rgba(255,255,255,.22);
-    border-radius:999px;padding:6px 14px;font-size:13px;font-weight:800;letter-spacing:.04em}
-  #sd-keeper{top:calc(45% - 46px)}
-  #sd-shooter{top:calc(45% + 12px)}
+  .mode-card .mc-emoji{font-size:44px;display:block;margin-bottom:6px}
+  .mc-title{font-size:21px;font-weight:900;font-style:italic;letter-spacing:.06em;margin-bottom:4px}
+  .mc-sub{font-size:13px;opacity:.75;font-weight:600}
 
   #vignette{position:fixed;inset:0;pointer-events:none;z-index:5;
     background:radial-gradient(ellipse at 50% 42%,transparent 55%,rgba(0,0,0,.42))}
@@ -170,65 +155,27 @@
 
 <!-- Title / team select -->
 <div id="title-screen" class="overlay dim">
-  <div class="kicker" id="title-kicker">⚽ Penalty Shootout</div>
+  <div class="kicker">⚽ Penalty Shootout</div>
   <h1 class="logo">ROBEL'S<br>WORLD CUP<br>STRIKER</h1>
-  <div class="sub" id="title-sub">Pick your nation. Win the cup.</div>
+  <div class="sub">Pick your nation. Win the cup.</div>
   <div class="grid" id="team-grid"></div>
 </div>
 
 <!-- Mode select -->
 <div id="mode-screen" class="overlay dim hidden">
-  <div class="kicker">Choose your game</div>
+  <div class="kicker">Choose your role</div>
   <div id="mode-row">
     <div class="mode-card" id="mode-striker">
       <span class="mc-emoji">⚽</span>
       <div class="mc-title">STRIKER</div>
-      <div class="mc-sub">Solo cup run — swipe to shoot</div>
+      <div class="mc-sub">Take the penalties — swipe to shoot</div>
     </div>
     <div class="mode-card" id="mode-keeper">
       <span class="mc-emoji">🧤</span>
       <div class="mc-title">GOALKEEPER</div>
-      <div class="mc-sub">Solo cup run — swipe to dive</div>
-    </div>
-    <div class="mode-card" id="mode-pass">
-      <span class="mc-emoji">🤝</span>
-      <div class="mc-title">2P PASS &amp; PLAY</div>
-      <div class="mc-sub">One screen — keeper picks in secret</div>
-    </div>
-    <div class="mode-card" id="mode-split">
-      <span class="mc-emoji">⚔️</span>
-      <div class="mc-title">2P SPLIT SCREEN</div>
-      <div class="mc-sub">Live duel — shoot low, dive up top</div>
+      <div class="mc-sub">Guard the net — swipe to dive</div>
     </div>
   </div>
-</div>
-
-<!-- Pass & play: keeper's secret zone pick -->
-<div id="zone-overlay" class="overlay dim hidden">
-  <div class="kicker">🧤 Keeper's secret pick</div>
-  <div class="sub" id="zone-sub">Choose where you'll dive.<br>Shooter — no peeking!</div>
-  <div id="zone-grid">
-    <button class="zone" data-side="-1" data-y="1.9">↖</button>
-    <button class="zone zone-mid" data-side="0" data-y="1.2">🧍</button>
-    <button class="zone" data-side="1" data-y="1.9">↗</button>
-    <button class="zone" data-side="-1" data-y="0.6">↙</button>
-    <button class="zone" data-side="1" data-y="0.6">↘</button>
-  </div>
-</div>
-
-<!-- Pass & play: hand the phone over -->
-<div id="handoff-overlay" class="overlay dim hidden">
-  <div class="big-emoji">⚽</div>
-  <h2 class="result win" id="handoff-title">PLAYER 1'S KICK</h2>
-  <div class="detail">Hand over the phone, then tap to shoot</div>
-  <div class="tap-note">Tap when ready</div>
-</div>
-
-<!-- Split screen divider -->
-<div id="split-divider" class="hidden">
-  <div id="sd-line"></div>
-  <div class="sd-tag" id="sd-keeper">🧤 KEEPER</div>
-  <div class="sd-tag" id="sd-shooter">⚽ STRIKER</div>
 </div>
 
 <!-- VS screen -->

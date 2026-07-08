@@ -17,8 +17,7 @@ Three.js is vendored in `lib/`.
 ## How to play
 
 1. **Pick your nation** — 12 teams to choose from.
-2. **Pick your game** — solo Striker, solo Goalkeeper, or one of the
-   two-player duels.
+2. **Pick your role** — Striker or Goalkeeper.
 
 **As the striker**, swipe up to shoot. Where you flick is where it goes:
 - flick **left/right** to pick a corner
@@ -32,19 +31,10 @@ it to dive** (swipe higher to reach high balls) — or **tap** to stand your
 ground for a shot down the middle. React fast: dive early and you're at
 full stretch when the ball arrives.
 
-**2P Pass & Play (one screen)** — the defending player secretly picks a
-dive zone, hands the phone over, and the shooter takes the kick. Pure
-penalty mind games, alternating every kick.
-
-**2P Split Screen (live duel)** — both players on the screen at once:
-the shooter flicks in the bottom zone while the keeper watches the swipe
-and dives from the top zone in real time.
-
-Best-of-5 shootout, sudden death if level. Solo modes run a three-match
-cup — win the **Quarterfinal**, **Semifinal**, and the **World Cup Final**
-to lift the trophy, with opponents shooting harder and keepers reading you
-better every round. Two-player duels are single matches with instant
-rematches.
+Best-of-5 shootout, sudden death if level. Win the **Quarterfinal**,
+**Semifinal**, and the **World Cup Final** to lift the trophy. Opponents
+shoot harder and place better (and their keeper reads your shots better)
+every round.
 
 ## Tech notes
 

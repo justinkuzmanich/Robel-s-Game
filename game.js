@@ -701,10 +701,8 @@ function distToSegment(px, py, ax, ay, bx, by) {
 
 // ---------------------------------------------------------------- game state
 const G = {
-  state: 'title',      // title | vs | await | flight | defend-ready | defend | duel | duel-flight | between | end
-  mode: 'striker',     // striker | keeper (camera / solo role)
-  mp: null,            // null (solo) | 'pass' | 'split' — in 2P, playerTeam is P1 and oppTeam is P2
-  duelDive: null,      // pass & play: the keeper's secret pick for the current kick
+  state: 'title',      // title | vs | await | flight | defend-ready | defend | between | end
+  mode: 'striker',     // striker | keeper
   playerTeam: null,
   oppTeam: null,
   opponents: [],
@@ -767,12 +765,8 @@ function shootoutResult() {
   return null;
 }
 
-// ---------------------------------------------------------------- input
-// multi-pointer tracking: solo modes use one gesture, split-screen tracks
-// the shooter (bottom zone) and keeper (top zone) at the same time.
-const touches = new Map(); // pointerId -> {zone, points}
-const SPLIT_Y = () => window.innerHeight * 0.45;
-const hasAimPointer = () => [...touches.values()].some(t => t.zone === 'aim');
+// ---------------------------------------------------------------- input: swipe to shoot
+const swipe = { active: false, id: null, points: [] };
 
 // forgiving flick mapping: swipe height picks shot height, sideways drift picks the corner.
 // A raw camera raycast made most natural flicks sail over the bar on portrait screens.
@@ -786,7 +780,8 @@ function aimTarget(first, cur) {
   );
 }
 
-function aimFromSwipe(pts) {
+function aimFromSwipe() {
+  const pts = swipe.points;
   const first = pts[0], last = pts[pts.length - 1];
   const target = aimTarget(first, last);
 
@@ -814,68 +809,46 @@ function aimFromSwipe(pts) {
 
 const canDive = () => (G.state === 'defend' || G.state === 'defend-ready') && !keeper.dive;
 
-// which input role a fresh touch takes, given where it starts and the game state
-function zoneForPointer(e) {
-  if (G.state === 'await') return hasAimPointer() ? null : 'aim';
-  if (canDive()) return 'dive-solo';
-  if (G.state === 'duel') {
-    if (e.clientY < SPLIT_Y()) return keeper.dive ? null : 'dive-duel';
-    return hasAimPointer() ? null : 'aim';
-  }
-  if (G.state === 'duel-flight') { // ball already struck: keeper can still react
-    return e.clientY < SPLIT_Y() && !keeper.dive ? 'dive-duel' : null;
-  }
-  return null;
-}
-
-function doDive(pts, invertX, dur) {
-  if (keeper.dive) return;
-  const first = pts[0], last = pts[pts.length - 1];
-  const dx = last.x - first.x, dy = first.y - last.y;
-  vibrate(20);
-  if (Math.hypot(dx, dy) < window.innerHeight * 0.03) {
-    keeper.startDive(0, 1.0, dur); // tap: stand tall in the middle
-  } else {
-    const side = (dx > 0 ? 1 : -1) * (invertX ? -1 : 1);
-    const targetY = clamp(0.5 + (dy / (window.innerHeight * 0.28)) * 1.7, 0.3, 2.3);
-    keeper.startDive(side, targetY, dur);
-  }
-}
-
 function onPointerDown(e) {
-  const zone = zoneForPointer(e);
-  if (!zone) return;
-  touches.set(e.pointerId, { zone, points: [{ x: e.clientX, y: e.clientY, t: performance.now() }] });
+  if (swipe.active) return;
+  if (G.state !== 'await' && !canDive()) return;
+  swipe.active = true;
+  swipe.id = e.pointerId;
+  swipe.points = [{ x: e.clientX, y: e.clientY, t: performance.now() }];
 }
 function onPointerMove(e) {
-  const t = touches.get(e.pointerId);
-  if (!t) return;
-  t.points.push({ x: e.clientX, y: e.clientY, t: performance.now() });
-  if (t.points.length > 64) t.points.shift();
-  if (t.zone !== 'aim') return;
+  if (!swipe.active || e.pointerId !== swipe.id) return;
+  swipe.points.push({ x: e.clientX, y: e.clientY, t: performance.now() });
+  if (swipe.points.length > 64) swipe.points.shift();
+  if (G.state !== 'await') return;
   // live aim reticle uses the same mapping as the shot itself
-  const a = aimTarget(t.points[0], { x: e.clientX, y: e.clientY });
+  const t = aimTarget(swipe.points[0], { x: e.clientX, y: e.clientY });
   reticle.visible = true;
-  reticle.position.set(a.x, a.y, 0.05);
+  reticle.position.set(t.x, t.y, 0.05);
 }
 function onPointerUp(e) {
-  const t = touches.get(e.pointerId);
-  if (!t) return;
-  touches.delete(e.pointerId);
-  const pts = t.points;
-  if (t.zone === 'aim') {
+  if (!swipe.active || e.pointerId !== swipe.id) return;
+  swipe.active = false;
+  const pts = swipe.points;
+  if (G.state === 'await') {
     reticle.visible = false;
-    if (G.state !== 'await' && G.state !== 'duel') return;
     if (pts.length < 3) return;
     const first = pts[0], last = pts[pts.length - 1];
     if (first.y - last.y < window.innerHeight * 0.04) return; // must swipe upward
-    takeShot(aimFromSwipe(pts));
-  } else if (t.zone === 'dive-solo' && canDive()) {
+    takeShot(aimFromSwipe());
+  } else if (canDive() && pts.length >= 1) {
+    const first = pts[0], last = pts[pts.length - 1];
+    const dx = last.x - first.x, dy = first.y - last.y;
     G.firstDiveTaken = true;
     el('hint').classList.add('hidden');
-    doDive(pts, true, 0.36); // solo keeper cam faces the pitch: screen-left is world +x
-  } else if (t.zone === 'dive-duel' && (G.state === 'duel' || G.state === 'duel-flight')) {
-    doDive(pts, false, 0.4); // striker cam: screen-right is world +x
+    vibrate(20);
+    if (Math.hypot(dx, dy) < window.innerHeight * 0.03) {
+      keeper.startDive(0, 1.0, 0.36); // tap: stand tall in the middle
+    } else {
+      const side = dx < 0 ? 1 : -1; // the camera faces the pitch, so screen-left is world +x
+      const targetY = clamp(0.5 + (dy / (window.innerHeight * 0.28)) * 1.7, 0.3, 2.3);
+      keeper.startDive(side, targetY, 0.36);
+    }
   }
 }
 window.addEventListener('pointerdown', onPointerDown);
@@ -887,11 +860,8 @@ window.addEventListener('pointercancel', onPointerUp);
 let resolveShot = null; // promise resolver for the in-flight shot
 let shotSeq = 0;
 
-const MP_REACH = 1.22;      // human keeper reach in 2-player duels
-const MP_RADIUS = 0.1;
-
 function takeShot({ target, power, curve }) {
-  G.state = G.mp === 'split' ? 'duel-flight' : 'flight';
+  G.state = 'flight';
   const myShot = ++shotSeq;
   setTimeout(() => { if (shotSeq === myShot) finishShot('wide'); }, 4000); // never leave the match loop hanging
   G.firstShotTaken = true;
@@ -900,34 +870,23 @@ function takeShot({ target, power, curve }) {
   vibrate(25);
   camPush = 1;
 
+  const stage = STAGES[G.stageIdx];
   Ball.kick(target, power, curve);
 
-  if (!G.mp) {
-    // solo: the AI keeper reads the shot (scaled by stage skill, easier on slow shots)
-    const stage = STAGES[G.stageIdx];
-    const slowBonus = Ball.flightTime > 0.88 ? 0.22 : 0;
-    const inGoal = Math.abs(target.x) < GOAL_W && target.y < GOAL_H;
-    const shotSide = Math.sign(target.x) || (Math.random() < 0.5 ? 1 : -1);
-    let dirX;
-    if (Math.random() < 0.12) dirX = 0; // keeper stays home
-    else if (inGoal && Math.random() < stage.guess + slowBonus) dirX = shotSide; // read it
-    else dirX = Math.random() < 0.75 ? -shotSide : shotSide; // wrong read, usually the opposite corner
-    const diveY = clamp((inGoal ? target.y : rand(0.4, 1.8)) + rand(-0.45, 0.45), 0.3, 2.3);
-    // fixed-ish dive time: hard shots arrive before the keeper is fully stretched
-    const diveDur = Math.max(0.62, Ball.flightTime - 0.08);
-    setTimeout(() => keeper.startDive(dirX, diveY, diveDur), 100);
-    Ball.onCross = (cx, cy, now) => finishShot(resolveCrossing(cx, cy, now, stage.reach));
-    return;
-  }
+  // keeper decides: read the shot (scaled by stage skill, easier on slow shots)
+  const slowBonus = Ball.flightTime > 0.88 ? 0.22 : 0;
+  const inGoal = Math.abs(target.x) < GOAL_W && target.y < GOAL_H;
+  const shotSide = Math.sign(target.x) || (Math.random() < 0.5 ? 1 : -1);
+  let dirX;
+  if (Math.random() < 0.12) dirX = 0; // keeper stays home
+  else if (inGoal && Math.random() < stage.guess + slowBonus) dirX = shotSide; // read it
+  else dirX = Math.random() < 0.75 ? -shotSide : shotSide; // wrong read, usually the opposite corner
+  const diveY = clamp((inGoal ? target.y : rand(0.4, 1.8)) + rand(-0.45, 0.45), 0.3, 2.3);
+  // fixed-ish dive time: hard shots arrive before the keeper is fully stretched
+  const diveDur = Math.max(0.62, Ball.flightTime - 0.08);
+  setTimeout(() => keeper.startDive(dirX, diveY, diveDur), 100);
 
-  if (G.mp === 'pass' && G.duelDive) {
-    // pass & play: the defending player's secret pick plays out
-    const d = G.duelDive;
-    const diveDur = Math.max(0.55, Ball.flightTime - 0.08);
-    setTimeout(() => keeper.startDive(d.side, d.y, diveDur), 100);
-  }
-  // split screen: the defending player dives live via the top input zone
-  Ball.onCross = (cx, cy, now) => finishShot(resolveCrossing(cx, cy, now, MP_REACH, MP_RADIUS));
+  Ball.onCross = (cx, cy, now) => finishShot(resolveCrossing(cx, cy, now, stage.reach));
 }
 
 // evaluate a shot the moment it reaches the goal plane; applies deflections and impact sounds.
@@ -1007,7 +966,7 @@ async function defendRound(token) {
   keeper.reset();
   striker.reset();
   hideBanner();
-  touches.clear(); // discard any gesture that started before this round
+  swipe.active = false; // discard any gesture that started before this round
   G.state = 'defend-ready';
   if (!G.firstDiveTaken) {
     el('hint').querySelector('.txt').textContent = 'Swipe to dive';
@@ -1025,92 +984,6 @@ async function defendRound(token) {
 function finishShot(outcome) {
   shotSeq++; // invalidate this shot's safety timeout
   if (resolveShot) { const r = resolveShot; resolveShot = null; r(outcome); }
-}
-
-// ---------------------------------------------------------------- 2-player duels
-let zoneResolve = null;
-(function wireZoneButtons() {
-  for (const b of document.querySelectorAll('.zone')) {
-    b.addEventListener('pointerup', () => {
-      if (!zoneResolve) return;
-      const r = zoneResolve;
-      zoneResolve = null;
-      vibrate(15);
-      r({ side: +b.dataset.side, y: +b.dataset.y });
-    });
-  }
-})();
-
-function awaitTap(elId) {
-  return new Promise(res => {
-    const node = el(elId);
-    const h = () => { node.removeEventListener('pointerup', h); res(); };
-    node.addEventListener('pointerup', h);
-  });
-}
-
-async function duelKick(token, p1Shoots) {
-  const alive = () => token === G.matchToken;
-  const kicker = p1Shoots ? G.playerTeam : G.oppTeam;
-  const defender = p1Shoots ? G.oppTeam : G.playerTeam;
-  Ball.placeOnSpot();
-  keeper.reset();
-  hideBanner();
-  touches.clear();
-  G.duelDive = null;
-  keeper.jerseyMat.color.set(defender.color === 0xffffff ? defender.alt : defender.color);
-  trail.material.color.set(kicker.color === 0xffffff ? kicker.alt : kicker.color);
-
-  if (G.mp === 'pass') {
-    // keeper picks a corner in secret, then the phone is handed to the shooter
-    el('zone-sub').innerHTML = `${defender.flag} ${defender.name} — choose where you'll dive.<br>${kicker.name}, no peeking!`;
-    el('zone-overlay').classList.remove('hidden');
-    G.duelDive = await new Promise(res => { zoneResolve = res; });
-    if (!alive()) return null;
-    el('zone-overlay').classList.add('hidden');
-    el('handoff-title').textContent = `${kicker.flag} ${kicker.name}'S KICK`;
-    el('handoff-overlay').classList.remove('hidden');
-    await awaitTap('handoff-overlay');
-    if (!alive()) return null;
-    el('handoff-overlay').classList.add('hidden');
-    G.state = 'await';
-  } else {
-    // split screen: label the zones and let both players play live
-    el('sd-keeper').textContent = `🧤 ${defender.flag} ${defender.name} — swipe up here to dive`;
-    el('sd-shooter').textContent = `⚽ ${kicker.flag} ${kicker.name} — flick up here to shoot`;
-    el('split-divider').classList.remove('hidden');
-    G.state = 'duel';
-  }
-  if (!G.firstShotTaken) {
-    el('hint').querySelector('.txt').textContent = 'Swipe to shoot';
-    el('hint').classList.remove('hidden');
-  }
-  const outcome = await new Promise(res => { resolveShot = res; });
-  if (!alive()) return null;
-  G.state = 'between';
-  el('split-divider').classList.add('hidden');
-
-  const scored = outcome === 'goal';
-  (p1Shoots ? G.pKicks : G.oKicks).push(scored);
-  renderScoreboard();
-  if (scored) {
-    showBanner('GOAL!', 'goal', `${kicker.flag} ${kicker.name} ${choice(['buries it!', 'finds the corner!', 'makes no mistake!'])}`);
-    AudioFX.cheer();
-    vibrate([40, 40, 60]);
-    confetti.burst(Ball.pos.x, 1.6, -1, [kicker.color, kicker.alt]);
-  } else if (outcome === 'save') {
-    showBanner('SAVED!', 'neutral', `${defender.flag} ${defender.name} ${choice(['reads it!', 'says no!', 'stands tall!'])}`);
-    AudioFX.cheer();
-    vibrate([30, 30, 30]);
-    confetti.burst(Ball.pos.x, 1.6, 1, [defender.color, defender.alt]);
-  } else {
-    const msg = { post: 'OFF THE WOODWORK!', over: 'OVER THE BAR!', wide: 'WIDE!' }[outcome];
-    showBanner(msg, 'bad', 'What a let-off!');
-    AudioFX.groan();
-    vibrate(60);
-  }
-  await sleep(1500);
-  return outcome;
 }
 
 // ---------------------------------------------------------------- match flow
@@ -1149,27 +1022,7 @@ async function runMatch(token) {
   G.pKicks = []; G.oKicks = [];
   renderScoreboard();
   el('hud').classList.remove('hidden');
-  el('stage-label').textContent = G.mp ? '2-PLAYER SHOWDOWN' : STAGES[G.stageIdx].name;
-
-  if (G.mp) { // 2-player duel: P1 shoots at P2's keeper, then roles swap
-    striker.show(false);
-    setNetOpacity(1);
-    AudioFX.whistle();
-    while (alive()) {
-      let outcome = await duelKick(token, true);
-      if (!alive()) return;
-      let result = shootoutResult();
-      if (result) return endMatch(result);
-      if (G.oKicks.length < G.pKicks.length) {
-        outcome = await duelKick(token, false);
-        if (!alive()) return;
-        result = shootoutResult();
-        if (result) return endMatch(result);
-      }
-    }
-    return;
-  }
-
+  el('stage-label').textContent = STAGES[G.stageIdx].name;
   // in keeper mode YOU are the keeper (your colors); the striker wears theirs
   keeper.jerseyMat.color.set(keeperMode
     ? (G.playerTeam.color === 0xffffff ? G.playerTeam.alt : G.playerTeam.color)
@@ -1261,30 +1114,11 @@ async function runMatch(token) {
 function endMatch(result) {
   G.state = 'end';
   el('hint').classList.add('hidden');
-  el('split-divider').classList.add('hidden');
   const p = G.pKicks.filter(Boolean).length, o = G.oKicks.filter(Boolean).length;
   const isFinal = G.stageIdx === STAGES.length - 1;
   const endEl = el('end-screen');
   const title = el('end-title'), emoji = el('end-emoji'), detail = el('end-detail');
   const primary = el('end-primary'), secondary = el('end-secondary');
-
-  if (G.mp) { // 2-player duel: crown the winner, offer a rematch
-    const winner = result === 'win' ? G.playerTeam : G.oppTeam;
-    emoji.textContent = '🏆';
-    title.textContent = `${winner.name} WINS!`;
-    title.className = 'result win';
-    detail.textContent = `${winner.flag} takes the shootout ${Math.max(p, o)}–${Math.min(p, o)}`;
-    primary.textContent = 'Rematch';
-    primary.onclick = () => { hideOverlays(); showVs(); };
-    secondary.onclick = () => { hideOverlays(); showTitle(); };
-    confetti.burst(0, 2.5, 3, [winner.color, winner.alt]);
-    AudioFX.cheer();
-    vibrate([60, 50, 60, 50, 120]);
-    hideBanner();
-    el('opp-overlay').classList.add('hidden');
-    endEl.classList.remove('hidden');
-    return;
-  }
 
   if (result === 'win' && isFinal) {
     emoji.textContent = '🏆';
@@ -1326,8 +1160,7 @@ function endMatch(result) {
 }
 
 function hideOverlays() {
-  for (const id of ['title-screen', 'mode-screen', 'vs-screen', 'end-screen', 'hint',
-    'zone-overlay', 'handoff-overlay', 'split-divider']) el(id).classList.add('hidden');
+  for (const id of ['title-screen', 'mode-screen', 'vs-screen', 'end-screen', 'hint']) el(id).classList.add('hidden');
   el('opp-overlay').classList.add('hidden');
   hideBanner();
 }
@@ -1336,17 +1169,11 @@ function showTitle() {
   G.matchToken++;
   G.state = 'title';
   G.mode = 'striker'; // title screen uses the behind-the-spot camera
-  G.mp = null;
-  pickingFor = 1;
-  zoneResolve = null;
-  el('title-kicker').textContent = '⚽ Penalty Shootout';
-  el('title-sub').textContent = 'Pick your nation. Win the cup.';
   hideOverlays();
   el('hud').classList.add('hidden');
   Ball.placeOnSpot();
   keeper.reset();
   striker.show(false);
-  setNetOpacity(1);
   camera.position.copy(camBase());
   camLook.set(0, 1.4, 0);
   el('title-screen').classList.remove('hidden');
@@ -1360,7 +1187,7 @@ function showVs() {
   striker.reset();
   camera.position.copy(camBase());
   camLook.set(0, 1.4, G.mode === 'keeper' ? 8 : 0);
-  el('vs-stage').textContent = G.mp ? '2-PLAYER SHOWDOWN' : STAGES[G.stageIdx].name;
+  el('vs-stage').textContent = STAGES[G.stageIdx].name;
   el('vs-pflag').textContent = G.playerTeam.flag;
   el('vs-pname').textContent = G.playerTeam.name;
   el('vs-oflag').textContent = G.oppTeam.flag;
@@ -1376,23 +1203,15 @@ function showVs() {
   el('vs-screen').addEventListener('pointerup', start);
 }
 
-let pickingFor = 1; // which player the team grid is currently choosing for
-
 function pickTeam(team) {
   AudioFX.init();
-  if (pickingFor === 1) {
-    G.playerTeam = team;
-    el('title-screen').classList.add('hidden');
-    el('mode-screen').classList.remove('hidden');
-  } else {
-    G.oppTeam = team; // player 2
-    startMpMatch();
-  }
+  G.playerTeam = team;
+  el('title-screen').classList.add('hidden');
+  el('mode-screen').classList.remove('hidden');
 }
 
 function startTournament(mode) {
   G.mode = mode;
-  G.mp = null;
   G.stageIdx = 0;
   G.firstShotTaken = false;
   G.firstDiveTaken = false;
@@ -1403,25 +1222,6 @@ function startTournament(mode) {
     if (!G.opponents.includes(t)) G.opponents.push(t);
   }
   G.oppTeam = G.opponents[0];
-  hideOverlays();
-  showVs();
-}
-
-function pickMpMode(mp) {
-  G.mp = mp;
-  pickingFor = 2;
-  el('mode-screen').classList.add('hidden');
-  el('title-kicker').textContent = '🎮 Player 2';
-  el('title-sub').textContent = "Pick Player 2's nation.";
-  el('title-screen').classList.remove('hidden');
-}
-
-function startMpMatch() {
-  pickingFor = 1;
-  G.mode = 'striker'; // duels play out on the behind-the-spot camera
-  G.stageIdx = 0;
-  G.firstShotTaken = false;
-  G.firstDiveTaken = false;
   hideOverlays();
   showVs();
 }
@@ -1438,8 +1238,6 @@ function startMpMatch() {
   }
   el('mode-striker').addEventListener('pointerdown', () => startTournament('striker'));
   el('mode-keeper').addEventListener('pointerdown', () => startTournament('keeper'));
-  el('mode-pass').addEventListener('pointerdown', () => pickMpMode('pass'));
-  el('mode-split').addEventListener('pointerdown', () => pickMpMode('split'));
 })();
 
 // ---------------------------------------------------------------- resize & render loop
