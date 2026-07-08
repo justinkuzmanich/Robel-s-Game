@@ -45,12 +45,17 @@ const GRAV = 9.8;
 
 // ---------------------------------------------------------------- audio (all synthesized, zero assets)
 const AudioFX = {
-  ctx: null, crowdGain: null,
+  ctx: null, crowdGain: null, master: null,
   init() {
     if (this.ctx) { this.ctx.resume && this.ctx.resume(); return; }
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     this.ctx = new AC();
+    // master bus with a compressor so layered cheers never clip
+    this.master = this.ctx.createDynamicsCompressor();
+    this.master.threshold.value = -18;
+    this.master.ratio.value = 6;
+    this.master.connect(this.ctx.destination);
     // ambient crowd bed: looped filtered noise
     const len = this.ctx.sampleRate * 2;
     const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
@@ -63,8 +68,43 @@ const AudioFX = {
     bp.type = 'bandpass'; bp.frequency.value = 800; bp.Q.value = 0.4;
     this.crowdGain = this.ctx.createGain();
     this.crowdGain.gain.value = 0.05;
-    src.connect(bp).connect(this.crowdGain).connect(this.ctx.destination);
+    src.connect(bp).connect(this.crowdGain).connect(this.master);
     src.start();
+  },
+  // one synthesized human shout: sawtooth "voice" shaped by vowel formant filters
+  shout(when, f0, dur, vol, formants, fall) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime + when;
+    const o = this.ctx.createOscillator();
+    o.type = 'sawtooth';
+    if (fall) { // "ohh" — pitch sags downward
+      o.frequency.setValueAtTime(f0 * (1.05 + Math.random() * 0.1), t);
+      o.frequency.linearRampToValueAtTime(f0 * 0.72, t + dur);
+    } else {    // "yeah!" — pitch leaps up into a sustained yell, then trails off
+      o.frequency.setValueAtTime(f0 * 0.7, t);
+      o.frequency.linearRampToValueAtTime(f0 * (1.08 + Math.random() * 0.18), t + 0.07 + Math.random() * 0.1);
+      o.frequency.linearRampToValueAtTime(f0 * (0.82 + Math.random() * 0.12), t + dur);
+    }
+    // vibrato makes it read as a voice instead of a buzzer
+    const vib = this.ctx.createOscillator(), vibGain = this.ctx.createGain();
+    vib.frequency.value = 4.5 + Math.random() * 3.5;
+    vibGain.gain.value = f0 * 0.035;
+    vib.connect(vibGain).connect(o.frequency);
+    const mix = this.ctx.createGain();
+    for (const fc of formants) {
+      const f = this.ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.frequency.value = fc * (0.92 + Math.random() * 0.16);
+      f.Q.value = 2.5;
+      o.connect(f).connect(mix);
+    }
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.04 + Math.random() * 0.06);
+    g.gain.setTargetAtTime(0.0001, t + dur * 0.55, dur * 0.25);
+    mix.connect(g).connect(this.master);
+    o.start(t); o.stop(t + dur + 0.4);
+    vib.start(t); vib.stop(t + dur + 0.4);
   },
   swell(peak, up, down) { // crowd reaction envelope
     if (!this.ctx) return;
@@ -74,8 +114,32 @@ const AudioFX = {
     g.linearRampToValueAtTime(peak, t + up);
     g.linearRampToValueAtTime(0.05, t + up + down);
   },
-  cheer() { this.swell(0.5, 0.08, 2.2); },
-  groan() { this.swell(0.22, 0.25, 1.4); },
+  cheer() {
+    if (!this.ctx) return;
+    this.swell(0.45, 0.08, 2.6);
+    // the roar: ~18 overlapping voices shouting on open "aah" formants,
+    // staggered starts so it blooms like a real crowd erupting
+    const AAH = [780, 1200, 2600];
+    for (let i = 0; i < 18; i++) {
+      const male = Math.random() < 0.6;
+      const f0 = male ? rand(130, 240) : rand(250, 430);
+      this.shout(Math.random() * 0.4, f0, rand(0.8, 1.8), rand(0.022, 0.045), AAH, false);
+    }
+    // scattered celebration whistles
+    for (let i = 0; i < 3; i++) {
+      const f = rand(1700, 2400);
+      this.tone(f, 0.3, 'sine', 0.04, rand(0.3, 1.1), f * 1.3);
+    }
+  },
+  groan() {
+    if (!this.ctx) return;
+    this.swell(0.22, 0.25, 1.4);
+    // a deflated "ohhh" — fewer, lower voices on rounded formants, pitch sagging
+    const OHH = [500, 900, 2300];
+    for (let i = 0; i < 9; i++) {
+      this.shout(Math.random() * 0.25, rand(110, 260), rand(0.7, 1.3), rand(0.015, 0.03), OHH, true);
+    }
+  },
   tone(freq, dur, type, vol, when = 0, glide = 0) {
     if (!this.ctx) return;
     const t = this.ctx.currentTime + when;
@@ -84,7 +148,7 @@ const AudioFX = {
     if (glide) o.frequency.exponentialRampToValueAtTime(glide, t + dur);
     g.gain.setValueAtTime(vol, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    o.connect(g).connect(this.ctx.destination);
+    o.connect(g).connect(this.master);
     o.start(t); o.stop(t + dur + 0.05);
   },
   whistle() { this.tone(2100, 0.14, 'square', 0.08); this.tone(2100, 0.3, 'square', 0.08, 0.2); },
