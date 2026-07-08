@@ -260,10 +260,17 @@ function makeCanvasTex(w, h, draw) {
     scene.add(m);
     return m;
   };
-  netPanel(GOAL_W * 2, GOAL_H).position.set(0, GOAL_H / 2 - 0.15, -1.9);           // back
-  netPanel(GOAL_W * 2, 2.0, -Math.PI / 2.35).position.set(0, GOAL_H - 0.35, -0.95); // roof
-  netPanel(2.0, GOAL_H, 0, Math.PI / 2).position.set(-GOAL_W, GOAL_H / 2 - 0.1, -0.95); // sides
-  netPanel(2.0, GOAL_H, 0, Math.PI / 2).position.set(GOAL_W, GOAL_H / 2 - 0.1, -0.95);
+  const panels = [
+    netPanel(GOAL_W * 2, GOAL_H),                    // back
+    netPanel(GOAL_W * 2, 2.0, -Math.PI / 2.35),      // roof
+    netPanel(2.0, GOAL_H, 0, Math.PI / 2),           // sides
+    netPanel(2.0, GOAL_H, 0, Math.PI / 2),
+  ];
+  panels[0].position.set(0, GOAL_H / 2 - 0.15, -1.9);
+  panels[1].position.set(0, GOAL_H - 0.35, -0.95);
+  panels[2].position.set(-GOAL_W, GOAL_H / 2 - 0.1, -0.95);
+  panels[3].position.set(GOAL_W, GOAL_H / 2 - 0.1, -0.95);
+  window.setNetOpacity = o => panels.forEach(p => { p.material.opacity = o; });
 })();
 
 // ---- stadium bowl: crowd texture on the inside of a cylinder
@@ -445,7 +452,14 @@ const keeper = (function () {
       return { ax: hipX, ay: hipY, bx: handX, by: handY, r: 0.45 };
     },
     update(now, dt) {
-      if (this.dive) {
+      if (this.dive && this.dive.dirX === 0) { // standing his ground: arms up, small hop
+        const p = this.progress(now);
+        const e = 1 - Math.pow(1 - p, 2.2);
+        group.position.x = lerp(group.position.x, 0, 0.3);
+        group.position.y = Math.sin(Math.min(p, 1) * Math.PI) * 0.22;
+        arms[0].rotation.z = lerp(-0.5, -2.7, e);
+        arms[1].rotation.z = lerp(0.5, 2.7, e);
+      } else if (this.dive) {
         const p = this.progress(now);
         const e = 1 - Math.pow(1 - p, 2.2); // ease-out
         const d = this.dive;
@@ -462,6 +476,68 @@ const keeper = (function () {
       }
       keeperShadow.position.x = group.position.x;
       keeperShadow.position.z = group.position.z;
+    },
+  };
+})();
+
+// ---- opposing striker (visible in keeper mode): runs up and strikes the ball
+const striker = (function () {
+  const group = new THREE.Group();
+  const jersey = new THREE.MeshLambertMaterial({ color: 0x3f6cff });
+  const dark = new THREE.MeshLambertMaterial({ color: 0x15181e });
+  const skin = new THREE.MeshLambertMaterial({ color: 0xc98d5f });
+  const add = (geo, mat, x, y, z, parent) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z);
+    (parent || group).add(m);
+    return m;
+  };
+  add(new THREE.BoxGeometry(0.16, 0.78, 0.16), dark, -0.12, 0.39, 0);
+  const kickHip = new THREE.Group(); // pivot so the strike leg can swing
+  kickHip.position.set(0.13, 0.82, 0);
+  add(new THREE.BoxGeometry(0.16, 0.78, 0.16), dark, 0, -0.39, 0, kickHip);
+  group.add(kickHip);
+  add(new THREE.BoxGeometry(0.46, 0.28, 0.24), dark, 0, 0.92, 0);
+  add(new THREE.BoxGeometry(0.52, 0.58, 0.28), jersey, 0, 1.32, 0);
+  add(new THREE.SphereGeometry(0.15, 12, 10), skin, 0, 1.78, 0);
+  for (const s of [-1, 1]) {
+    const arm = add(new THREE.BoxGeometry(0.12, 0.56, 0.12), jersey, s * 0.35, 1.28, 0);
+    arm.rotation.z = s * 0.35;
+  }
+  group.visible = false;
+  scene.add(group);
+
+  const START = new THREE.Vector3(0.4, 0, 13.0);
+  const STRIKE = new THREE.Vector3(0.28, 0, 11.55);
+  let anim = null;
+  let idleT = 0;
+  return {
+    group,
+    jerseyMat: jersey,
+    show(v) { group.visible = v; },
+    reset() {
+      anim = null;
+      group.position.copy(START);
+      kickHip.rotation.x = 0;
+    },
+    startRun(dur, now) { anim = { t0: now, dur }; }, // boot meets ball ~0.1s after dur
+    update(now, dt) {
+      if (!group.visible) return;
+      if (!anim) {
+        idleT += dt;
+        group.position.y = Math.abs(Math.sin(idleT * 2.2)) * 0.03;
+        return;
+      }
+      const t = (now - anim.t0) / anim.dur;
+      if (t < 1) {
+        group.position.lerpVectors(START, STRIKE, t);
+        group.position.y = Math.abs(Math.sin(t * Math.PI * 3)) * 0.07;
+        kickHip.rotation.x = lerp(0, 0.9, t); // backswing
+      } else {
+        const k = clamp((now - anim.t0 - anim.dur) / 0.12, 0, 1);
+        group.position.copy(STRIKE);
+        kickHip.rotation.x = lerp(0.9, -1.15, k); // strike through the ball
+      }
     },
   };
 })();
@@ -625,7 +701,8 @@ function distToSegment(px, py, ax, ay, bx, by) {
 
 // ---------------------------------------------------------------- game state
 const G = {
-  state: 'title',      // title | vs | await | flight | between | end
+  state: 'title',      // title | vs | await | flight | defend-ready | defend | between | end
+  mode: 'striker',     // striker | keeper
   playerTeam: null,
   oppTeam: null,
   opponents: [],
@@ -633,6 +710,7 @@ const G = {
   pKicks: [], oKicks: [], // arrays of booleans per taken kick
   matchToken: 0,
   firstShotTaken: false,
+  firstDiveTaken: false,
 };
 
 let camShake = 0;
@@ -729,8 +807,11 @@ function aimFromSwipe() {
   return { target, power, curve };
 }
 
+const canDive = () => (G.state === 'defend' || G.state === 'defend-ready') && !keeper.dive;
+
 function onPointerDown(e) {
-  if (G.state !== 'await' || swipe.active) return;
+  if (swipe.active) return;
+  if (G.state !== 'await' && !canDive()) return;
   swipe.active = true;
   swipe.id = e.pointerId;
   swipe.points = [{ x: e.clientX, y: e.clientY, t: performance.now() }];
@@ -739,6 +820,7 @@ function onPointerMove(e) {
   if (!swipe.active || e.pointerId !== swipe.id) return;
   swipe.points.push({ x: e.clientX, y: e.clientY, t: performance.now() });
   if (swipe.points.length > 64) swipe.points.shift();
+  if (G.state !== 'await') return;
   // live aim reticle uses the same mapping as the shot itself
   const t = aimTarget(swipe.points[0], { x: e.clientX, y: e.clientY });
   reticle.visible = true;
@@ -747,12 +829,27 @@ function onPointerMove(e) {
 function onPointerUp(e) {
   if (!swipe.active || e.pointerId !== swipe.id) return;
   swipe.active = false;
-  reticle.visible = false;
   const pts = swipe.points;
-  if (G.state !== 'await' || pts.length < 3) return;
-  const first = pts[0], last = pts[pts.length - 1];
-  if (first.y - last.y < window.innerHeight * 0.04) return; // must swipe upward
-  takeShot(aimFromSwipe());
+  if (G.state === 'await') {
+    reticle.visible = false;
+    if (pts.length < 3) return;
+    const first = pts[0], last = pts[pts.length - 1];
+    if (first.y - last.y < window.innerHeight * 0.04) return; // must swipe upward
+    takeShot(aimFromSwipe());
+  } else if (canDive() && pts.length >= 1) {
+    const first = pts[0], last = pts[pts.length - 1];
+    const dx = last.x - first.x, dy = first.y - last.y;
+    G.firstDiveTaken = true;
+    el('hint').classList.add('hidden');
+    vibrate(20);
+    if (Math.hypot(dx, dy) < window.innerHeight * 0.03) {
+      keeper.startDive(0, 1.0, 0.36); // tap: stand tall in the middle
+    } else {
+      const side = dx < 0 ? 1 : -1; // the camera faces the pitch, so screen-left is world +x
+      const targetY = clamp(0.5 + (dy / (window.innerHeight * 0.28)) * 1.7, 0.3, 2.3);
+      keeper.startDive(side, targetY, 0.36);
+    }
+  }
 }
 window.addEventListener('pointerdown', onPointerDown);
 window.addEventListener('pointermove', onPointerMove);
@@ -789,42 +886,99 @@ function takeShot({ target, power, curve }) {
   const diveDur = Math.max(0.62, Ball.flightTime - 0.08);
   setTimeout(() => keeper.startDive(dirX, diveY, diveDur), 100);
 
-  Ball.onCross = (cx, cy, now) => {
-    const stageReach = stage.reach;
-    // frame check
-    const nearPostL = Math.abs(cx + GOAL_W) < BALL_R + POST_R && cy < GOAL_H + 0.2;
-    const nearPostR = Math.abs(cx - GOAL_W) < BALL_R + POST_R && cy < GOAL_H + 0.2;
-    const nearBar = Math.abs(cy - GOAL_H) < BALL_R + POST_R && Math.abs(cx) < GOAL_W + 0.2;
-    if (nearPostL || nearPostR || nearBar) {
-      AudioFX.clang();
-      vibrate([20, 30, 20]);
-      camShake = 0.5;
-      Ball.vel.z = Math.abs(Ball.vel.z) * 0.45;
-      if (nearBar) Ball.vel.y = -Math.abs(Ball.vel.y) * 0.3 - 2;
-      else Ball.vel.x = (cx > 0 ? -1 : 1) * Math.abs(Ball.vel.x) * 0.6 + (cx > 0 ? -2 : 2);
-      finishShot('post');
-      return;
-    }
-    if (Math.abs(cx) >= GOAL_W || cy >= GOAL_H) { finishShot(cy >= GOAL_H ? 'over' : 'wide'); return; }
+  Ball.onCross = (cx, cy, now) => finishShot(resolveCrossing(cx, cy, now, stage.reach));
+}
 
-    // keeper save check: distance from ball to the dive-coverage segment
-    const p = keeper.progress(now);
-    const cov = keeper.coverage(p);
-    const d = distToSegment(cx, cy, cov.ax * stageReach, cov.ay, cov.bx * stageReach, cov.by);
-    if (d < cov.r + BALL_R) {
-      // parry: ball bounces back out
-      Ball.vel.z = Math.abs(Ball.vel.z) * 0.32;
-      Ball.vel.x = Math.sign(cx - cov.bx || rand(-1, 1)) * rand(2, 5);
-      Ball.vel.y = Math.abs(Ball.vel.y) * 0.3 + 1.5;
-      AudioFX.thud();
-      camShake = 0.35;
-      finishShot('save');
-    } else {
-      Ball.netted = true;
-      camShake = 0.55;
-      finishShot('goal');
-    }
-  };
+// evaluate a shot the moment it reaches the goal plane; applies deflections and impact sounds.
+// `reach` scales the keeper's coverage (stage skill for the AI keeper, a fixed bonus for you).
+function resolveCrossing(cx, cy, now, reach, radiusBonus = 0) {
+  const nearPostL = Math.abs(cx + GOAL_W) < BALL_R + POST_R && cy < GOAL_H + 0.2;
+  const nearPostR = Math.abs(cx - GOAL_W) < BALL_R + POST_R && cy < GOAL_H + 0.2;
+  const nearBar = Math.abs(cy - GOAL_H) < BALL_R + POST_R && Math.abs(cx) < GOAL_W + 0.2;
+  if (nearPostL || nearPostR || nearBar) {
+    AudioFX.clang();
+    vibrate([20, 30, 20]);
+    camShake = 0.5;
+    Ball.vel.z = Math.abs(Ball.vel.z) * 0.45;
+    if (nearBar) Ball.vel.y = -Math.abs(Ball.vel.y) * 0.3 - 2;
+    else Ball.vel.x = (cx > 0 ? -1 : 1) * Math.abs(Ball.vel.x) * 0.6 + (cx > 0 ? -2 : 2);
+    return 'post';
+  }
+  if (Math.abs(cx) >= GOAL_W || cy >= GOAL_H) return cy >= GOAL_H ? 'over' : 'wide';
+
+  // save check: distance from ball to the keeper's dive-coverage segment
+  const p = keeper.progress(now);
+  const cov = keeper.coverage(p);
+  const d = distToSegment(cx, cy, cov.ax * reach, cov.ay, cov.bx * reach, cov.by);
+  if (d < cov.r + radiusBonus + BALL_R) {
+    // parry: ball bounces back out
+    Ball.vel.z = Math.abs(Ball.vel.z) * 0.32;
+    Ball.vel.x = Math.sign(cx - cov.bx || rand(-1, 1)) * rand(2, 5);
+    Ball.vel.y = Math.abs(Ball.vel.y) * 0.3 + 1.5;
+    AudioFX.thud();
+    camShake = 0.35;
+    return 'save';
+  }
+  Ball.netted = true;
+  camShake = 0.55;
+  return 'goal';
+}
+
+// ---------------------------------------------------------------- keeper mode: the AI takes the kicks
+// AI shot placement: mostly corners with pace, occasionally off target for a breather
+function aiAim() {
+  const offRate = [0.14, 0.11, 0.08][G.stageIdx];
+  let x, y;
+  if (Math.random() < offRate) { // narrowly off target
+    if (Math.random() < 0.6) { x = rand(3.75, 4.4) * (Math.random() < 0.5 ? -1 : 1); y = rand(0.3, 2.1); }
+    else { x = rand(-2.5, 2.5); y = rand(2.6, 3.2); }
+  } else if (Math.random() < 0.72) { // corners
+    x = rand(1.5, 3.0) * (Math.random() < 0.5 ? -1 : 1);
+    y = Math.random() < 0.55 ? rand(0.3, 1.0) : rand(1.4, 2.2);
+  } else { // through the middle
+    x = rand(-1.5, 1.5);
+    y = rand(0.3, 1.8);
+  }
+  const power = [rand(0.4, 0.68), rand(0.5, 0.78), rand(0.58, 0.88)][G.stageIdx];
+  return { target: new THREE.Vector3(x, y, 0), power, curve: rand(-0.55, 0.55) };
+}
+
+const PLAYER_REACH = 1.3;   // your gloves stretch further than the AI keeper's
+const PLAYER_RADIUS = 0.18; // plus a forgiveness margin around your dive line
+
+function aiKick() {
+  const myShot = ++shotSeq;
+  setTimeout(() => { if (shotSeq === myShot) finishShot('wide'); }, 4000);
+  const { target, power, curve } = aiAim();
+  AudioFX.kick();
+  Ball.kick(target, power, curve);
+  G.state = 'defend';
+  // brief flash of where the shot is headed — your read-and-react window
+  reticle.position.set(clamp(target.x, -4.2, 4.2), clamp(target.y, 0.2, 3), 0.05);
+  reticle.visible = true;
+  setTimeout(() => { if (G.state === 'defend') reticle.visible = false; }, 300);
+  Ball.onCross = (cx, cy, now) => finishShot(resolveCrossing(cx, cy, now, PLAYER_REACH, PLAYER_RADIUS));
+}
+
+async function defendRound(token) {
+  const alive = () => token === G.matchToken;
+  Ball.placeOnSpot();
+  keeper.reset();
+  striker.reset();
+  hideBanner();
+  swipe.active = false; // discard any gesture that started before this round
+  G.state = 'defend-ready';
+  if (!G.firstDiveTaken) {
+    el('hint').querySelector('.txt').textContent = 'Swipe to dive';
+    el('hint').classList.remove('hidden');
+  }
+  await sleep(rand(600, 1300));
+  if (!alive()) return null;
+  striker.startRun(0.55, performance.now() / 1000);
+  await sleep(650); // boot meets ball
+  if (!alive()) return null;
+  aiKick();
+  return new Promise(res => { resolveShot = res; });
 }
 
 function finishShot(outcome) {
@@ -833,70 +987,126 @@ function finishShot(outcome) {
 }
 
 // ---------------------------------------------------------------- match flow
+// quick simulated cutaway for whichever side you're not playing
+async function simKickRound(token, isPlayerTeam) {
+  const alive = () => token === G.matchToken;
+  hideBanner();
+  const team = isPlayerTeam ? G.playerTeam : G.oppTeam;
+  const card = el('opp-card');
+  el('opp-overlay').classList.remove('hidden', 'show');
+  card.textContent = `${team.flag} ${team.name} step${isPlayerTeam ? '' : 's'} up...`;
+  el('opp-overlay').classList.add('show');
+  AudioFX.swell(0.16, 0.5, 0.8);
+  await sleep(1200);
+  if (!alive()) return;
+  const scores = Math.random() < (isPlayerTeam ? [0.74, 0.72, 0.70][G.stageIdx] : STAGES[G.stageIdx].oppRate);
+  (isPlayerTeam ? G.pKicks : G.oKicks).push(scores);
+  renderScoreboard();
+  if (isPlayerTeam) {
+    card.textContent = scores ? `${team.flag} GOAL! 🎉` : `😖 Their keeper saves it!`;
+    if (scores) { AudioFX.cheer(); vibrate([30, 30, 30]); } else AudioFX.groan();
+  } else {
+    card.textContent = scores ? `${team.flag} GOAL 😖` : `🧤 YOUR KEEPER SAVES IT!`;
+    if (scores) AudioFX.groan(); else { AudioFX.cheer(); vibrate([30, 30, 30]); }
+  }
+  await sleep(1300);
+  if (!alive()) return;
+  el('opp-overlay').classList.remove('show');
+  await sleep(200);
+  el('opp-overlay').classList.add('hidden');
+}
+
 async function runMatch(token) {
   const alive = () => token === G.matchToken;
+  const keeperMode = G.mode === 'keeper';
   G.pKicks = []; G.oKicks = [];
   renderScoreboard();
   el('hud').classList.remove('hidden');
   el('stage-label').textContent = STAGES[G.stageIdx].name;
-  keeper.jerseyMat.color.set(G.oppTeam.alt);
+  // in keeper mode YOU are the keeper (your colors); the striker wears theirs
+  keeper.jerseyMat.color.set(keeperMode
+    ? (G.playerTeam.color === 0xffffff ? G.playerTeam.alt : G.playerTeam.color)
+    : G.oppTeam.alt);
+  striker.show(keeperMode);
+  striker.jerseyMat.color.set(G.oppTeam.color === 0xffffff ? G.oppTeam.alt : G.oppTeam.color);
+  const shooter = keeperMode ? G.oppTeam : G.playerTeam;
+  trail.material.color.set(shooter.color === 0xffffff ? shooter.alt : shooter.color);
+  setNetOpacity(keeperMode ? 0.35 : 1); // the keeper cam looks through the net — keep it subtle
   AudioFX.whistle();
 
-  let round = 0;
   while (alive()) {
-    round++;
-    // ----- player kick
-    Ball.placeOnSpot();
-    keeper.reset();
-    hideBanner();
-    G.state = 'await';
-    if (!G.firstShotTaken) el('hint').classList.remove('hidden');
-    const outcome = await new Promise(res => { resolveShot = res; }); // resolved via takeShot→finishShot
-    if (!alive()) return;
-
-    const scored = outcome === 'goal';
-    G.pKicks.push(scored);
-    renderScoreboard();
-    if (scored) {
-      showBanner('GOAL!', 'goal', choice(['What a strike!', 'Top bins!', 'Cool as ice!', 'Unstoppable!']));
-      AudioFX.cheer();
-      vibrate([40, 40, 60]);
-      confetti.burst(Ball.pos.x, 1.6, -1, [G.playerTeam.color, G.playerTeam.alt]);
-    } else {
-      const msg = { save: 'SAVED!', post: 'OFF THE WOODWORK!', over: 'OVER THE BAR!', wide: 'WIDE!' }[outcome];
-      showBanner(msg, 'bad', outcome === 'save' ? 'The keeper read it!' : 'So close!');
-      AudioFX.groan();
-      vibrate(60);
-    }
-    await sleep(1500);
-    if (!alive()) return;
-
-    let result = shootoutResult();
-    if (result) return endMatch(result);
-
-    // ----- opponent kick (quick simulated cutaway)
-    if (G.oKicks.length < G.pKicks.length) {
-      hideBanner();
-      const card = el('opp-card');
-      el('opp-overlay').classList.remove('hidden', 'show');
-      card.textContent = `${G.oppTeam.flag} ${G.oppTeam.name} steps up...`;
-      el('opp-overlay').classList.add('show');
-      AudioFX.swell(0.16, 0.5, 0.8);
-      await sleep(1200);
+    if (keeperMode) {
+      // ----- opponent kick: you defend it live
+      const outcome = await defendRound(token);
       if (!alive()) return;
-      const oppScores = Math.random() < STAGES[G.stageIdx].oppRate;
-      G.oKicks.push(oppScores);
+      G.state = 'between';
+      G.oKicks.push(outcome === 'goal');
       renderScoreboard();
-      card.textContent = oppScores ? `${G.oppTeam.flag} GOAL 😖` : `🧤 YOUR KEEPER SAVES IT!`;
-      if (oppScores) AudioFX.groan(); else { AudioFX.cheer(); vibrate([30, 30, 30]); }
-      await sleep(1300);
+      if (outcome === 'save') {
+        showBanner('SUPER SAVE!', 'goal', choice(['What a stop!', 'Fingertips!', 'Denied!', 'Safe hands!']));
+        AudioFX.cheer();
+        vibrate([40, 40, 60]);
+        confetti.burst(Ball.pos.x, 1.6, 1, [G.playerTeam.color, G.playerTeam.alt]);
+      } else if (outcome === 'goal') {
+        showBanner('GOAL CONCEDED', 'bad', 'They found the corner...');
+        AudioFX.groan();
+        vibrate(60);
+      } else {
+        showBanner({ post: 'OFF THE POST!', over: 'OVER THE BAR!', wide: 'WIDE!' }[outcome], 'neutral', 'It stays level!');
+        AudioFX.swell(0.3, 0.15, 1.5);
+      }
+      await sleep(1500);
       if (!alive()) return;
-      el('opp-overlay').classList.remove('show');
-      await sleep(200);
-      el('opp-overlay').classList.add('hidden');
-
-      result = shootoutResult();
+      let result = shootoutResult();
       if (result) return endMatch(result);
+
+      // ----- your team's kick (quick simulated cutaway)
+      if (G.pKicks.length < G.oKicks.length) {
+        await simKickRound(token, true);
+        if (!alive()) return;
+        result = shootoutResult();
+        if (result) return endMatch(result);
+      }
+    } else {
+      // ----- player kick
+      Ball.placeOnSpot();
+      keeper.reset();
+      hideBanner();
+      G.state = 'await';
+      if (!G.firstShotTaken) {
+        el('hint').querySelector('.txt').textContent = 'Swipe to shoot';
+        el('hint').classList.remove('hidden');
+      }
+      const outcome = await new Promise(res => { resolveShot = res; }); // resolved via takeShot→finishShot
+      if (!alive()) return;
+
+      const scored = outcome === 'goal';
+      G.pKicks.push(scored);
+      renderScoreboard();
+      if (scored) {
+        showBanner('GOAL!', 'goal', choice(['What a strike!', 'Top bins!', 'Cool as ice!', 'Unstoppable!']));
+        AudioFX.cheer();
+        vibrate([40, 40, 60]);
+        confetti.burst(Ball.pos.x, 1.6, -1, [G.playerTeam.color, G.playerTeam.alt]);
+      } else {
+        const msg = { save: 'SAVED!', post: 'OFF THE WOODWORK!', over: 'OVER THE BAR!', wide: 'WIDE!' }[outcome];
+        showBanner(msg, 'bad', outcome === 'save' ? 'The keeper read it!' : 'So close!');
+        AudioFX.groan();
+        vibrate(60);
+      }
+      await sleep(1500);
+      if (!alive()) return;
+
+      let result = shootoutResult();
+      if (result) return endMatch(result);
+
+      // ----- opponent kick (quick simulated cutaway)
+      if (G.oKicks.length < G.pKicks.length) {
+        await simKickRound(token, false);
+        if (!alive()) return;
+        result = shootoutResult();
+        if (result) return endMatch(result);
+      }
     }
   }
 }
@@ -950,7 +1160,7 @@ function endMatch(result) {
 }
 
 function hideOverlays() {
-  for (const id of ['title-screen', 'vs-screen', 'end-screen', 'hint']) el(id).classList.add('hidden');
+  for (const id of ['title-screen', 'mode-screen', 'vs-screen', 'end-screen', 'hint']) el(id).classList.add('hidden');
   el('opp-overlay').classList.add('hidden');
   hideBanner();
 }
@@ -958,10 +1168,14 @@ function hideOverlays() {
 function showTitle() {
   G.matchToken++;
   G.state = 'title';
+  G.mode = 'striker'; // title screen uses the behind-the-spot camera
   hideOverlays();
   el('hud').classList.add('hidden');
   Ball.placeOnSpot();
   keeper.reset();
+  striker.show(false);
+  camera.position.copy(camBase());
+  camLook.set(0, 1.4, 0);
   el('title-screen').classList.remove('hidden');
 }
 
@@ -970,56 +1184,73 @@ function showVs() {
   G.state = 'vs';
   Ball.placeOnSpot();
   keeper.reset();
+  striker.reset();
+  camera.position.copy(camBase());
+  camLook.set(0, 1.4, G.mode === 'keeper' ? 8 : 0);
   el('vs-stage').textContent = STAGES[G.stageIdx].name;
   el('vs-pflag').textContent = G.playerTeam.flag;
   el('vs-pname').textContent = G.playerTeam.name;
   el('vs-oflag').textContent = G.oppTeam.flag;
   el('vs-oname').textContent = G.oppTeam.name;
   el('vs-screen').classList.remove('hidden');
+  // start on pointerUP so the kickoff tap's release can't register as a dive/shot input
   const start = () => {
-    el('vs-screen').removeEventListener('pointerdown', start);
+    el('vs-screen').removeEventListener('pointerup', start);
     el('vs-screen').classList.add('hidden');
     G.matchToken++;
     runMatch(G.matchToken);
   };
-  el('vs-screen').addEventListener('pointerdown', start);
+  el('vs-screen').addEventListener('pointerup', start);
 }
 
-function startTournament(team) {
+function pickTeam(team) {
   AudioFX.init();
   G.playerTeam = team;
+  el('title-screen').classList.add('hidden');
+  el('mode-screen').classList.remove('hidden');
+}
+
+function startTournament(mode) {
+  G.mode = mode;
   G.stageIdx = 0;
   G.firstShotTaken = false;
-  const pool = TEAMS.filter(t => t !== team);
+  G.firstDiveTaken = false;
+  const pool = TEAMS.filter(t => t !== G.playerTeam);
   G.opponents = [];
   while (G.opponents.length < STAGES.length) {
     const t = choice(pool);
     if (!G.opponents.includes(t)) G.opponents.push(t);
   }
   G.oppTeam = G.opponents[0];
-  trail.material.color.set(team.color === 0xffffff ? team.alt : team.color);
   hideOverlays();
   showVs();
 }
 
-// build the team-select grid
+// build the team-select grid + mode buttons
 (function buildTeamGrid() {
   const grid = el('team-grid');
   for (const team of TEAMS) {
     const d = document.createElement('div');
     d.className = 'team';
     d.innerHTML = `<span class="flag">${team.flag}</span><span class="name">${team.name}</span>`;
-    d.addEventListener('pointerdown', () => startTournament(team));
+    d.addEventListener('pointerdown', () => pickTeam(team));
     grid.appendChild(d);
   }
+  el('mode-striker').addEventListener('pointerdown', () => startTournament('striker'));
+  el('mode-keeper').addEventListener('pointerdown', () => startTournament('keeper'));
 })();
 
 // ---------------------------------------------------------------- resize & render loop
+// per-mode camera home position; narrow portrait pulls back so the goal always fits
+function camBase() {
+  const squeeze = camera.aspect < 0.62 ? (0.62 - camera.aspect) : 0;
+  return G.mode === 'keeper'
+    ? new THREE.Vector3(0, 3.7, -3.6 - squeeze * 4) // above the crossbar, looking down the pitch
+    : new THREE.Vector3(0, 2.3, SPOT_Z + 4.6 + squeeze * 6);
+}
+
 function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
-  // pull the camera back a touch in very narrow portrait so the goal always fits
-  const a = camera.aspect;
-  camera.position.z = CAM_BASE.z + (a < 0.62 ? (0.62 - a) * 6 : 0);
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
@@ -1035,6 +1266,7 @@ function frame() {
 
   Ball.update(dt, now);
   keeper.update(now, dt);
+  striker.update(now, dt);
   confetti.update(dt);
 
   // reticle pulse
@@ -1046,15 +1278,16 @@ function frame() {
   // camera: subtle push-in on the shot, follow the ball a little, shake on impact
   camPush = Math.max(0, camPush - dt * 1.4);
   camShake = Math.max(0, camShake - dt * 2.2);
-  const followX = Ball.flying ? Ball.pos.x * 0.18 : 0;
+  const base = camBase();
+  const keeperCam = G.mode === 'keeper';
+  const followX = Ball.flying ? Ball.pos.x * (keeperCam ? 0.12 : 0.18) : 0;
   camera.position.x = lerp(camera.position.x, followX + (Math.random() - 0.5) * camShake * 0.3, 0.12);
-  camera.position.y = CAM_BASE.y + (Math.random() - 0.5) * camShake * 0.25;
-  camera.position.z = camera.position.z - camPush * dt * 2.2;
-  if (!Ball.flying && camPush === 0) camera.position.z = lerp(camera.position.z, CAM_BASE.z + (camera.aspect < 0.62 ? (0.62 - camera.aspect) * 6 : 0), 0.04);
+  camera.position.y = base.y + (Math.random() - 0.5) * camShake * 0.25;
+  camera.position.z = lerp(camera.position.z, base.z + (keeperCam ? 0 : -camPush * 1.4), 0.09);
   camLook.set(
     lerp(camLook.x, Ball.flying ? Ball.pos.x * 0.35 : 0, 0.1),
-    lerp(camLook.y, Ball.flying ? clamp(Ball.pos.y * 0.5 + 0.9, 1.1, 1.9) : 1.4, 0.1),
-    0
+    lerp(camLook.y, Ball.flying ? clamp(Ball.pos.y * 0.5 + 0.9, keeperCam ? 0.7 : 1.1, 1.9) : (keeperCam ? 0.8 : 1.4), 0.1),
+    keeperCam ? 8 : 0 // keeper cam looks up the pitch toward the spot
   );
   camera.lookAt(camLook);
 

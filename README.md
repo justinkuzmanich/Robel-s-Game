@@ -17,14 +17,24 @@ Three.js is vendored in `lib/`.
 ## How to play
 
 1. **Pick your nation** — 12 teams to choose from.
-2. **Swipe up to shoot.** Where you flick is where it goes:
-   - flick **left/right** to pick a corner
-   - flick **higher** for a higher shot (too high = over the bar)
-   - flick **fast** for power — hard shots arrive before the keeper is fully stretched
-   - **curl your swipe** to bend the ball around the keeper
-3. Best-of-5 shootout, sudden death if level. Win the **Quarterfinal**,
-   **Semifinal**, and the **World Cup Final** to lift the trophy. The keeper
-   reads shots better and dives further every round.
+2. **Pick your role** — Striker or Goalkeeper.
+
+**As the striker**, swipe up to shoot. Where you flick is where it goes:
+- flick **left/right** to pick a corner
+- flick **higher** for a higher shot (too high = over the bar)
+- flick **fast** for power — hard shots arrive before the keeper is fully stretched
+- **curl your swipe** to bend the ball around the keeper
+
+**As the goalkeeper**, guard the net while the rival striker runs up. Watch
+for the golden flash showing where the shot is headed, then **swipe toward
+it to dive** (swipe higher to reach high balls) — or **tap** to stand your
+ground for a shot down the middle. React fast: dive early and you're at
+full stretch when the ball arrives.
+
+Best-of-5 shootout, sudden death if level. Win the **Quarterfinal**,
+**Semifinal**, and the **World Cup Final** to lift the trophy. Opponents
+shoot harder and place better (and their keeper reads your shots better)
+every round.
 
 ## Tech notes
 
