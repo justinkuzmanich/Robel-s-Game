@@ -130,6 +130,36 @@ had been hiding:
    Fixed with **max anisotropic filtering** on the net textures, bolder mesh
    lines, and a back top rail so the roof's rear edge reads as structure.
 
+## 11. True online multiplayer — phone vs phone
+
+**The plan** (agreed before building): WebRTC peer-to-peer via PeerJS —
+phones connect directly, a free signaling service handles only the
+introduction, and the site stays fully static. Fixed roles with a halftime
+swap: host shoots 5, guest keeps, then roles flip; sudden death alternates.
+
+**The clever bit — hiding lag:** the striker's phone sends only the kick
+parameters; the keeper's phone simulates the ball locally, so the keeper's
+reflexes are measured fairly against what they actually see. The keeper's
+phone is the referee — it holds both the shot and the dive, runs the save
+check, and sends back the verdict plus a dive replay that the striker's
+phone plays out on its original timeline. The network round-trip disappears
+inside the goal celebration.
+
+**What was built:** lobby with 5-letter room codes and shareable invite
+links (`?room=CODE` joins directly), hello/start handshake, the
+kick/dive/verdict protocol, halftime and sudden-death role swaps with
+camera changes, synchronized scoreboards, rematch with roles reversed,
+heartbeat pings with a connection-lost screen, and a BroadcastChannel
+loopback transport so two browser tabs can duel in automated tests.
+
+**Bugs the two-tab test caught:** the role-swap schedule was inverted (the
+host kept shooting forever), and background-tab throttling froze the
+simulation on whichever tab wasn't focused — fixed with a catch-up ticker
+that advances the simulation in fixed substeps whenever the render loop
+stalls (which also protects real matches when a phone briefly dims). Final
+test run: a full 5–4 duel with halftime swap, complementary win/lose
+screens, and both phones' records perfectly mirrored.
+
 ---
 
 ## Where things stand

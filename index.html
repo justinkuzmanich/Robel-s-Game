@@ -117,6 +117,17 @@
   .mc-title{font-size:21px;font-weight:900;font-style:italic;letter-spacing:.06em;margin-bottom:4px}
   .mc-sub{font-size:13px;opacity:.75;font-weight:600}
 
+  /* online lobby */
+  #lobby-home,#lobby-wait{display:flex;flex-direction:column;align-items:center;gap:14px;margin-top:20px}
+  .lobby-divider{font-size:13px;opacity:.6;letter-spacing:.2em}
+  .lobby-label{font-size:12px;letter-spacing:.25em;text-transform:uppercase;opacity:.7;font-weight:700}
+  #join-code{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.25);border-radius:14px;
+    color:var(--ink);font-size:26px;font-weight:900;letter-spacing:.35em;text-align:center;
+    padding:12px 8px;width:230px;text-transform:uppercase;outline:none}
+  #join-code:focus{border-color:var(--gold)}
+  #room-code{font-size:52px;font-weight:900;letter-spacing:.3em;color:var(--gold);
+    text-shadow:0 4px 18px rgba(255,190,40,.4);padding-left:.3em}
+
   #vignette{position:fixed;inset:0;pointer-events:none;z-index:5;
     background:radial-gradient(ellipse at 50% 42%,transparent 55%,rgba(0,0,0,.42))}
 </style>
@@ -175,7 +186,39 @@
       <div class="mc-title">GOALKEEPER</div>
       <div class="mc-sub">Guard the net — swipe to dive</div>
     </div>
+    <div class="mode-card" id="mode-online">
+      <span class="mc-emoji">🌍</span>
+      <div class="mc-title">ONLINE DUEL</div>
+      <div class="mc-sub">Play a friend on their phone — striker vs keeper, swap at halftime</div>
+    </div>
   </div>
+</div>
+
+<!-- Online lobby -->
+<div id="online-screen" class="overlay dim hidden">
+  <div class="kicker">🌍 Online duel</div>
+  <div id="lobby-home">
+    <button class="btn" id="btn-create">Create match</button>
+    <div class="lobby-divider">— or —</div>
+    <input id="join-code" inputmode="latin" autocapitalize="characters" autocomplete="off"
+      maxlength="5" placeholder="CODE">
+    <button class="btn ghost" id="btn-join">Join match</button>
+  </div>
+  <div id="lobby-wait" class="hidden">
+    <div class="lobby-label">Your match code</div>
+    <div id="room-code">·····</div>
+    <button class="btn ghost" id="btn-share">Share invite link</button>
+    <div id="lobby-status" class="lobby-label">Setting up...</div>
+  </div>
+  <button class="btn ghost" id="btn-lobby-back" style="margin-top:26px">Back</button>
+</div>
+
+<!-- Connection lost -->
+<div id="net-lost" class="overlay dim hidden">
+  <div class="big-emoji">📡</div>
+  <h2 class="result lose">CONNECTION LOST</h2>
+  <div class="detail" id="net-lost-detail">The other player disconnected.</div>
+  <button class="btn" id="btn-net-menu">Main menu</button>
 </div>
 
 <!-- VS screen -->
@@ -199,6 +242,7 @@
 </div>
 
 <script src="lib/three.min.js"></script>
-<script src="game.js?v=13"></script>
+<script src="lib/peerjs.min.js"></script>
+<script src="game.js?v=14"></script>
 </body>
 </html>

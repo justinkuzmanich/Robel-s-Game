@@ -451,17 +451,17 @@ const keeper = (function () {
       arms[0].rotation.z = -0.5;
       arms[1].rotation.z = 0.5;
     },
-    startDive(dirX, targetY, dur) {
+    startDive(dirX, targetY, dur, startAt) {
       this.dive = {
         type: dirX === 0 ? 'stand' : 'dive',
         dirX, targetY, dur,
-        start: performance.now() / 1000,
+        start: startAt != null ? startAt : performance.now() / 1000, // startAt: replay a remote dive on its original timeline
         side: Math.sign(dirX) || (Math.random() < 0.5 ? 1 : -1),
         bx: this.baseX, // dive launches from wherever the keeper shuffled to
       };
     },
-    startJump(dur) {
-      this.dive = { type: 'jump', dirX: 0, targetY: 2.4, dur, start: performance.now() / 1000, side: 0, bx: this.baseX };
+    startJump(dur, startAt) {
+      this.dive = { type: 'jump', dirX: 0, targetY: 2.4, dur, start: startAt != null ? startAt : performance.now() / 1000, side: 0, bx: this.baseX };
     },
     progress(now) {
       if (!this.dive) return 0;
@@ -744,9 +744,117 @@ function distToSegment(px, py, ax, ay, bx, by) {
   return Math.hypot(px - qx, py - qy);
 }
 
+// ---------------------------------------------------------------- online transport
+// PeerJS (WebRTC data channel, free cloud signaling) in production;
+// a BroadcastChannel loopback (?loop=NAME + ?host=1) for automated two-tab testing.
+const Net = {
+  peer: null, conn: null, bc: null,
+  connected: false,
+  isHost: false,
+  handlers: {},
+  onOpen: null, onLost: null,
+  lastHeard: 0,
+  _pingTimer: null,
+
+  makeCode() {
+    const A = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no 0/O/1/I/L
+    let s = '';
+    for (let i = 0; i < 5; i++) s += A[(Math.random() * A.length) | 0];
+    return s;
+  },
+  loopParam: () => new URLSearchParams(location.search).get('loop'),
+
+  create(code, onStatus) {
+    this.isHost = true;
+    if (this.loopParam()) return this._loop(true);
+    this.peer = new Peer('rwcs-' + code, { debug: 0 });
+    this.peer.on('open', () => onStatus('Waiting for your opponent...'));
+    this.peer.on('connection', c => { this.conn = c; this._wire(c); });
+    this.peer.on('error', e => onStatus('Connection error (' + e.type + ')'));
+  },
+  join(code, onStatus) {
+    this.isHost = false;
+    if (this.loopParam()) return this._loop(false);
+    onStatus('Connecting...');
+    this.peer = new Peer({ debug: 0 });
+    this.peer.on('open', () => {
+      const c = this.peer.connect('rwcs-' + code, { reliable: true });
+      this.conn = c;
+      this._wire(c);
+    });
+    this.peer.on('error', e => onStatus(e.type === 'peer-unavailable'
+      ? 'No match found with that code.' : 'Connection error (' + e.type + ')'));
+  },
+  _wire(c) {
+    c.on('open', () => { this.connected = true; this._heartbeat(); if (this.onOpen) this.onOpen(); });
+    c.on('data', d => this._recv(d));
+    c.on('close', () => this._lost());
+    c.on('error', () => this._lost());
+  },
+  _loop(host) {
+    this.bc = new BroadcastChannel('rwcs-' + this.loopParam());
+    this.bc.onmessage = ev => {
+      const d = ev.data;
+      if (d === '__hello__') { if (host) { this.bc.postMessage('__hi__'); this._open(); } }
+      else if (d === '__hi__') { if (!host) this._open(); }
+      else if (d && typeof d === 'object') this._recv(d);
+    };
+    if (!host) { // retry until the host tab answers
+      const iv = setInterval(() => {
+        if (this.connected || !this.bc) clearInterval(iv);
+        else this.bc.postMessage('__hello__');
+      }, 300);
+      this.bc.postMessage('__hello__');
+    }
+  },
+  _open() {
+    if (this.connected) return;
+    this.connected = true;
+    this._heartbeat();
+    if (this.onOpen) this.onOpen();
+  },
+  send(msg) {
+    try {
+      if (this.bc) this.bc.postMessage(msg);
+      else if (this.conn && this.connected) this.conn.send(msg);
+    } catch (e) {}
+  },
+  _recv(msg) {
+    this.lastHeard = performance.now();
+    if (msg.t === 'ping') { this.send({ t: 'pong' }); return; }
+    if (msg.t === 'pong') return;
+    const h = this.handlers[msg.t];
+    if (h) h(msg);
+  },
+  on(t, fn) { this.handlers[t] = fn; },
+  _heartbeat() {
+    this.lastHeard = performance.now();
+    clearInterval(this._pingTimer);
+    this._pingTimer = setInterval(() => {
+      this.send({ t: 'ping' });
+      if (performance.now() - this.lastHeard > 9000) this._lost();
+    }, 2500);
+  },
+  _lost() {
+    const cb = this.onLost, was = this.connected;
+    this.close();
+    if (was && cb) cb();
+  },
+  close() {
+    clearInterval(this._pingTimer);
+    this.connected = false;
+    try { this.conn && this.conn.close(); } catch (e) {}
+    try { this.peer && this.peer.destroy(); } catch (e) {}
+    try { this.bc && this.bc.close(); } catch (e) {}
+    this.peer = this.conn = this.bc = null;
+    this.handlers = {};
+    this.onOpen = this.onLost = null;
+  },
+};
+
 // ---------------------------------------------------------------- game state
 const G = {
-  state: 'title',      // title | vs | await | flight | defend-ready | defend | between | end
+  state: 'title',      // title | vs | await | flight | defend-ready | defend | between | end | lobby
   mode: 'striker',     // striker | keeper
   playerTeam: null,
   oppTeam: null,
@@ -756,6 +864,7 @@ const G = {
   matchToken: 0,
   firstShotTaken: false,
   firstDiveTaken: false,
+  online: null,        // online duel state: {hostFirst, kickT, remoteOutcome, kickParams, ...}
 };
 
 let camShake = 0;
@@ -908,6 +1017,7 @@ function onPointerUp(e) {
     } else {
       keeper.startDive(0, 1.0, 0.3); // stand tall in the middle
     }
+    if (G.online) sendDiveToOpponent(); // their phone replays my dive on its own timeline
   }
 }
 window.addEventListener('pointerdown', onPointerDown);
@@ -929,9 +1039,24 @@ function takeShot({ target, power, curve }) {
   vibrate(25);
   camPush = 1;
 
-  const stage = STAGES[G.stageIdx];
   Ball.kick(target, power, curve);
 
+  if (G.online) {
+    // online: send the kick to the opponent's phone. Their keeper is the referee;
+    // our local crossing verdict only drives the ball visuals until theirs arrives.
+    G.online.kickT = performance.now() / 1000;
+    G.online.remoteOutcome = null;
+    G.online.crossed = false;
+    Net.send({ t: 'kick', x: target.x, y: target.y, power, curve });
+    Ball.onCross = (cx, cy, now) => {
+      resolveCrossing(cx, cy, now, PLAYER_REACH, PLAYER_RADIUS); // visuals: net vs parry vs clang
+      G.online.crossed = true;
+      if (G.online.remoteOutcome) finishShot(G.online.remoteOutcome);
+    };
+    return;
+  }
+
+  const stage = STAGES[G.stageIdx];
   // keeper decides: read the shot (scaled by stage skill, easier on slow shots)
   const slowBonus = Ball.flightTime > 0.88 ? 0.22 : 0;
   const inGoal = Math.abs(target.x) < GOAL_W && target.y < GOAL_H;
@@ -1045,6 +1170,361 @@ function finishShot(outcome) {
   shotSeq++; // invalidate this shot's safety timeout
   if (resolveShot) { const r = resolveShot; resolveShot = null; r(outcome); }
 }
+
+// ---------------------------------------------------------------- online duel
+// Fixed roles per half: the host strikes all of half 1 while the guest keeps,
+// then roles swap for half 2; sudden death alternates single kicks. The
+// keeper's phone is the referee — it holds both the shot and the dive, so its
+// verdict decides the score. The striker's phone replays the dive and ball
+// flight locally, which hides the network round-trip inside the celebration.
+
+function sendDiveToOpponent() {
+  const d = keeper.dive;
+  if (!d || !G.online || G.online.diveSent) return;
+  G.online.diveSent = true;
+  const msg = { t: 'dive', type: d.type, dirX: d.dirX, side: d.side, targetY: d.targetY, dur: d.dur };
+  if (G.online.kickT != null) {
+    msg.delay = d.start - G.online.kickT; // seconds after the kick (may be negative for an early guess)
+    Net.send(msg);
+  } else {
+    G.online.pendingDive = { msg, startAbs: d.start }; // dove before the kick arrived; send once we know kick time
+  }
+}
+
+function onlineStageLabel() {
+  const o = G.online;
+  const a = o.A.length, b = o.B.length;
+  if (a >= 5 && b >= 5) return 'ONLINE DUEL · SUDDEN DEATH';
+  return a < 5 ? 'ONLINE DUEL · FIRST HALF' : 'ONLINE DUEL · SECOND HALF';
+}
+
+// decision + schedule over the two shooting records (A = host's kicks, B = guest's)
+function duelDecision(A, B) {
+  const a = A.filter(Boolean).length, b = B.filter(Boolean).length;
+  if (A.length >= 5 && B.length <= 5) {
+    if (b > a) return 'B';
+    if (b + Math.max(0, 5 - B.length) < a) return 'A';
+    if (B.length === 5 && A.length === 5 && a !== b) return a > b ? 'A' : 'B';
+  }
+  if (A.length === B.length && A.length > 5 && a !== b) return a > b ? 'A' : 'B';
+  return null;
+}
+// A kicks all of half 1; then B until level; tied pairs start with A again
+const nextKickerIsA = (A, B) => A.length < 5 ? true : B.length >= A.length;
+
+// my shot this round: wait for my swipe, the opponent's verdict settles it
+async function onlineKickAsStriker(token) {
+  const alive = () => token === G.matchToken;
+  Ball.placeOnSpot();
+  keeper.reset();
+  keeper.playerControlled = false; // the on-screen keeper replays the opponent's dive
+  striker.show(false);
+  hideBanner();
+  G.online.kickT = null;
+  G.online.diveSent = false;
+  G.state = 'await';
+  if (!G.firstShotTaken) {
+    el('hint').querySelector('.txt').textContent = 'Swipe to shoot';
+    el('hint').classList.remove('hidden');
+  }
+  const outcome = await new Promise(res => { resolveShot = res; });
+  return alive() ? outcome : null;
+}
+
+// their shot: their kick params arrive, I defend live, my phone referees
+async function onlineKickAsKeeper(token) {
+  const alive = () => token === G.matchToken;
+  Ball.placeOnSpot();
+  keeper.reset();
+  keeper.playerControlled = true;
+  striker.reset();
+  striker.show(true);
+  hideBanner();
+  G.online.kickT = null;
+  G.online.diveSent = false;
+  G.online.pendingDive = null;
+  G.state = 'defend-ready'; // lean is allowed before the kick — an early commitment
+  if (!G.firstDiveTaken) {
+    el('hint').querySelector('.txt').textContent = 'Hold & lean, release to dive · push up to jump';
+    el('hint').classList.remove('hidden');
+  }
+  let kick;
+  if (G.online.queuedKick) {
+    kick = G.online.queuedKick;
+    G.online.queuedKick = null;
+  } else {
+    kick = await new Promise(res => { G.online.kickResolve = res; });
+  }
+  if (!alive()) return null;
+
+  const myShot = ++shotSeq;
+  setTimeout(() => { if (shotSeq === myShot) finishShot('wide'); }, 4000);
+  AudioFX.kick();
+  striker.startRun(0.06, performance.now() / 1000 - 0.06); // instant strike pose, no run-up delay online
+  Ball.kick(new THREE.Vector3(kick.x, kick.y, 0), kick.power, kick.curve);
+  G.online.kickT = performance.now() / 1000;
+  if (G.online.pendingDive) { // dove early: now we can timestamp it relative to the kick
+    const pd = G.online.pendingDive;
+    pd.msg.delay = pd.startAbs - G.online.kickT;
+    Net.send(pd.msg);
+    G.online.pendingDive = null;
+  }
+  G.state = 'defend';
+  reticle.position.set(clamp(kick.x, -4.2, 4.2), clamp(kick.y, 0.2, 3), 0.05);
+  reticle.visible = true;
+  setTimeout(() => { if (G.state === 'defend') reticle.visible = false; }, 300);
+  Ball.onCross = (cx, cy, now) => {
+    const verdict = resolveCrossing(cx, cy, now, PLAYER_REACH, PLAYER_RADIUS);
+    Net.send({ t: 'outcome', result: verdict }); // I'm the referee for this kick
+    finishShot(verdict);
+  };
+  const outcome = await new Promise(res => { resolveShot = res; });
+  return alive() ? outcome : null;
+}
+
+async function runOnlineMatch(token) {
+  const alive = () => token === G.matchToken;
+  const o = G.online;
+  o.A = []; o.B = [];
+  G.pKicks = []; G.oKicks = []; // pKicks = MY goals when shooting (scoreboard)
+  renderScoreboard();
+  el('hud').classList.remove('hidden');
+  setNetOpacity(1);
+  striker.jerseyMat.color.set(G.oppTeam.color === 0xffffff ? G.oppTeam.alt : G.oppTeam.color);
+  AudioFX.whistle();
+
+  let prevIShoot = null;
+  while (alive()) {
+    const kickerIsA = nextKickerIsA(o.A, o.B);
+    const iShoot = kickerIsA === (o.hostFirst ? Net.isHost : !Net.isHost);
+    el('stage-label').textContent = onlineStageLabel();
+
+    // halftime / role-change presentation
+    if (prevIShoot !== null && prevIShoot !== iShoot) {
+      showBanner(o.A.length === 5 && o.B.length === 0 ? 'HALF TIME' : 'ROLES SWAP', 'neutral',
+        iShoot ? 'You take the kicks now!' : 'Into goal — defend your net!');
+      await sleep(1800);
+      if (!alive()) return;
+      hideBanner();
+    }
+    if (prevIShoot !== iShoot) {
+      G.mode = iShoot ? 'striker' : 'keeper';
+      applyCameraMode();
+      camLook.set(0, iShoot ? 1.4 : 0.8, iShoot ? 0 : 8);
+    }
+    prevIShoot = iShoot;
+
+    const kicker = iShoot ? G.playerTeam : G.oppTeam;
+    const defender = iShoot ? G.oppTeam : G.playerTeam;
+    keeper.jerseyMat.color.set(defender.color === 0xffffff ? defender.alt : defender.color);
+    trail.material.color.set(kicker.color === 0xffffff ? kicker.alt : kicker.color);
+
+    const outcome = iShoot ? await onlineKickAsStriker(token) : await onlineKickAsKeeper(token);
+    if (!alive()) return;
+    G.state = 'between';
+
+    const scored = outcome === 'goal';
+    (kickerIsA ? o.A : o.B).push(scored);
+    (iShoot ? G.pKicks : G.oKicks).push(scored);
+    renderScoreboard();
+
+    if (iShoot) {
+      if (scored) {
+        showBanner('GOAL!', 'goal', choice(['What a strike!', 'Top bins!', 'Unstoppable!']));
+        AudioFX.cheer(); vibrate([40, 40, 60]);
+        confetti.burst(Ball.pos.x, 1.6, -1, [G.playerTeam.color, G.playerTeam.alt]);
+      } else {
+        const msg = { save: 'SAVED!', post: 'OFF THE WOODWORK!', over: 'OVER THE BAR!', wide: 'WIDE!' }[outcome] || 'NO GOAL';
+        showBanner(msg, 'bad', outcome === 'save' ? `${G.oppTeam.name} read it!` : 'So close!');
+        AudioFX.groan(); vibrate(60);
+      }
+    } else {
+      if (outcome === 'save') {
+        showBanner('SUPER SAVE!', 'goal', choice(['What a stop!', 'Fingertips!', 'Denied!']));
+        AudioFX.cheer(); vibrate([40, 40, 60]);
+        confetti.burst(Ball.pos.x, 1.6, 1, [G.playerTeam.color, G.playerTeam.alt]);
+      } else if (scored) {
+        showBanner('GOAL CONCEDED', 'bad', 'They found the corner...');
+        AudioFX.groan(); vibrate(60);
+      } else {
+        showBanner({ post: 'OFF THE POST!', over: 'OVER THE BAR!', wide: 'WIDE!' }[outcome] || 'OFF TARGET', 'neutral', 'Let-off!');
+        AudioFX.swell(0.3, 0.15, 1.5);
+      }
+    }
+    await sleep(1700);
+    if (!alive()) return;
+
+    const decision = duelDecision(o.A, o.B);
+    if (decision) return endOnlineMatch(decision);
+  }
+}
+
+function endOnlineMatch(decision) {
+  G.state = 'end';
+  el('hint').classList.add('hidden');
+  const o = G.online;
+  const iAmA = o.hostFirst ? Net.isHost : !Net.isHost;
+  const iWin = (decision === 'A') === iAmA;
+  const my = G.pKicks.filter(Boolean).length, their = G.oKicks.filter(Boolean).length;
+  const emoji = el('end-emoji'), title = el('end-title'), detail = el('end-detail');
+  const primary = el('end-primary'), secondary = el('end-secondary');
+  emoji.textContent = iWin ? '🏆' : '💔';
+  title.textContent = iWin ? 'YOU WIN!' : `${G.oppTeam.name} WINS`;
+  title.className = 'result ' + (iWin ? 'win' : 'lose');
+  detail.textContent = `${G.playerTeam.flag} ${my} – ${their} ${G.oppTeam.flag}`;
+  primary.textContent = 'Rematch';
+  primary.onclick = () => {
+    o.rematchMe = true;
+    Net.send({ t: 'rematch' });
+    detail.textContent = 'Waiting for your opponent...';
+    maybeStartRematch();
+  };
+  secondary.onclick = () => { Net.send({ t: 'bye' }); showTitle(); };
+  if (iWin) { confetti.burst(0, 2.5, 3, [G.playerTeam.color, G.playerTeam.alt]); AudioFX.cheer(); vibrate([60, 50, 60, 50, 120]); }
+  else AudioFX.groan();
+  hideBanner();
+  el('end-screen').classList.remove('hidden');
+}
+
+function maybeStartRematch() {
+  const o = G.online;
+  if (!o || !o.rematchMe || !o.rematchThem) return;
+  o.rematchMe = o.rematchThem = false;
+  o.hostFirst = !o.hostFirst; // swap who strikes first each rematch
+  hideOverlays();
+  beginOnlineMatch();
+}
+
+function beginOnlineMatch() {
+  G.matchToken++;
+  G.state = 'vs';
+  G.firstShotTaken = false;
+  G.firstDiveTaken = false;
+  Ball.placeOnSpot();
+  keeper.reset();
+  el('vs-stage').textContent = 'ONLINE DUEL';
+  el('vs-pflag').textContent = G.playerTeam.flag;
+  el('vs-pname').textContent = G.playerTeam.name;
+  el('vs-oflag').textContent = G.oppTeam.flag;
+  el('vs-oname').textContent = G.oppTeam.name;
+  el('vs-screen').classList.remove('hidden');
+  // no tap-to-start online: both phones auto-kick-off in sync
+  const token = ++G.matchToken;
+  setTimeout(() => {
+    if (token !== G.matchToken || !G.online) return;
+    el('vs-screen').classList.add('hidden');
+    runOnlineMatch(token);
+  }, 2600);
+}
+
+function wireOnlineHandlers() {
+  Net.on('hello', m => {
+    G.oppTeam = TEAMS[m.team] || TEAMS[0];
+    const o = G.online;
+    o.gotHello = true;
+    if (Net.isHost && !o.started) {
+      o.started = true;
+      Net.send({ t: 'start', hostFirst: o.hostFirst });
+      hideOverlays();
+      beginOnlineMatch();
+    }
+  });
+  Net.on('start', m => {
+    const o = G.online;
+    if (o.started) return;
+    o.started = true;
+    o.hostFirst = m.hostFirst;
+    hideOverlays();
+    beginOnlineMatch();
+  });
+  Net.on('kick', m => {
+    if (!G.online) return;
+    if (G.online.kickResolve) {
+      const r = G.online.kickResolve;
+      G.online.kickResolve = null;
+      r(m);
+    } else G.online.queuedKick = m; // arrived a beat before this round was ready
+  });
+  Net.on('dive', m => {
+    // replay the opponent keeper's dive on my screen, on its original timeline
+    if (!G.online || G.online.kickT == null || keeper.dive) return;
+    const startAt = G.online.kickT + (m.delay || 0);
+    if (m.type === 'jump') keeper.startJump(m.dur, startAt);
+    else keeper.startDive(m.dirX, m.targetY, m.dur, startAt);
+  });
+  Net.on('outcome', m => {
+    if (!G.online) return;
+    G.online.remoteOutcome = m.result;
+    if (G.online.crossed) finishShot(m.result); // referee's verdict settles my kick
+  });
+  Net.on('rematch', () => {
+    if (!G.online) return;
+    G.online.rematchThem = true;
+    maybeStartRematch();
+  });
+  Net.on('bye', () => Net._lost());
+  Net.onLost = () => {
+    if (!G.online) return;
+    G.online = null;
+    hideOverlays();
+    el('hud').classList.add('hidden');
+    el('net-lost').classList.remove('hidden');
+  };
+}
+
+// ---- lobby wiring
+function showOnlineLobby() {
+  G.state = 'lobby';
+  el('mode-screen').classList.add('hidden');
+  el('lobby-home').classList.remove('hidden');
+  el('lobby-wait').classList.add('hidden');
+  el('online-screen').classList.remove('hidden');
+}
+
+function startOnlineAs(host, code) {
+  G.online = { hostFirst: true, started: false, gotHello: false, rematchMe: false, rematchThem: false };
+  wireOnlineHandlers();
+  Net.onOpen = () => {
+    el('lobby-status').textContent = 'Opponent connected!';
+    Net.send({ t: 'hello', team: TEAMS.indexOf(G.playerTeam) });
+  };
+  const status = s => { el('lobby-status').textContent = s; };
+  el('lobby-home').classList.add('hidden');
+  el('lobby-wait').classList.remove('hidden');
+  if (host) {
+    el('room-code').textContent = code;
+    el('btn-share').classList.remove('hidden');
+    Net.create(code, status);
+    status('Waiting for your opponent...');
+  } else {
+    el('room-code').textContent = code;
+    el('btn-share').classList.add('hidden');
+    Net.join(code, status);
+    status('Connecting...');
+  }
+}
+
+(function wireLobbyUI() {
+  el('btn-create').addEventListener('click', () => startOnlineAs(true, Net.makeCode()));
+  el('btn-join').addEventListener('click', () => {
+    const code = el('join-code').value.trim().toUpperCase();
+    if (code.length >= 4 || Net.loopParam()) startOnlineAs(false, code || 'LOOP');
+  });
+  el('btn-share').addEventListener('click', () => {
+    const code = el('room-code').textContent;
+    const url = location.origin + location.pathname + '?room=' + code;
+    if (navigator.share) navigator.share({ title: "Robel's World Cup Striker", text: 'Penalty duel — I shoot, you save. Join me!', url }).catch(() => {});
+    else navigator.clipboard && navigator.clipboard.writeText(url).then(() => { el('lobby-status').textContent = 'Link copied!'; });
+  });
+  el('btn-lobby-back').addEventListener('click', () => {
+    Net.close();
+    G.online = null;
+    el('online-screen').classList.add('hidden');
+    el('mode-screen').classList.remove('hidden');
+    G.state = 'title';
+  });
+  el('btn-net-menu').addEventListener('click', () => showTitle());
+})();
 
 // ---------------------------------------------------------------- match flow
 // quick simulated cutaway for whichever side you're not playing
@@ -1221,7 +1701,8 @@ function endMatch(result) {
 }
 
 function hideOverlays() {
-  for (const id of ['title-screen', 'mode-screen', 'vs-screen', 'end-screen', 'hint']) el(id).classList.add('hidden');
+  for (const id of ['title-screen', 'mode-screen', 'vs-screen', 'end-screen', 'hint',
+    'online-screen', 'net-lost']) el(id).classList.add('hidden');
   el('opp-overlay').classList.add('hidden');
   hideBanner();
 }
@@ -1230,6 +1711,8 @@ function showTitle() {
   G.matchToken++;
   G.state = 'title';
   G.mode = 'striker'; // title screen uses the behind-the-spot camera
+  Net.close();
+  G.online = null;
   hideOverlays();
   el('hud').classList.add('hidden');
   Ball.placeOnSpot();
@@ -1269,6 +1752,11 @@ function pickTeam(team) {
   AudioFX.init();
   G.playerTeam = team;
   el('title-screen').classList.add('hidden');
+  if (inviteRoom && !G.online) { // arrived via an invite link: join straight away
+    showOnlineLobby();
+    startOnlineAs(false, inviteRoom.toUpperCase());
+    return;
+  }
   el('mode-screen').classList.remove('hidden');
 }
 
@@ -1300,7 +1788,11 @@ function startTournament(mode) {
   }
   el('mode-striker').addEventListener('pointerdown', () => startTournament('striker'));
   el('mode-keeper').addEventListener('pointerdown', () => startTournament('keeper'));
+  el('mode-online').addEventListener('pointerdown', () => showOnlineLobby());
 })();
+
+// invite links (?room=CODE) jump straight into joining after the team pick
+const inviteRoom = new URLSearchParams(location.search).get('room');
 
 // ---------------------------------------------------------------- resize & render loop
 // per-mode camera home position; narrow portrait pulls back so the goal always fits
@@ -1327,6 +1819,27 @@ window.addEventListener('resize', onResize);
 onResize();
 
 let lastT = performance.now() / 1000;
+
+// keep the simulation honest even when rAF stalls (hidden/backgrounded tab):
+// catch up in fixed substeps so online verdicts still resolve on time
+function stepSim(dt, now) {
+  Ball.update(dt, now);
+  keeper.update(now, dt);
+  striker.update(now, dt);
+  confetti.update(dt);
+}
+setInterval(() => {
+  const now = performance.now() / 1000;
+  if (now - lastT > 0.2) {
+    let t = lastT;
+    while (t < now - 0.03) {
+      t = Math.min(t + 0.033, now);
+      stepSim(0.033, t);
+    }
+    lastT = now;
+  }
+}, 120);
+
 function frame() {
   requestAnimationFrame(frame);
   const now = performance.now() / 1000;

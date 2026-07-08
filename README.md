@@ -17,7 +17,8 @@ Three.js is vendored in `lib/`.
 ## How to play
 
 1. **Pick your nation** — 12 teams to choose from.
-2. **Pick your role** — Striker or Goalkeeper.
+2. **Pick your game** — solo Striker, solo Goalkeeper, or an Online Duel
+   against a friend on their own phone.
 
 **As the striker**, swipe up to shoot. Where you flick is where it goes:
 - flick **left/right** to pick a corner
@@ -25,16 +26,25 @@ Three.js is vendored in `lib/`.
 - flick **fast** for power — hard shots arrive before the keeper is fully stretched
 - **curl your swipe** to bend the ball around the keeper
 
-**As the goalkeeper**, guard the net while the rival striker runs up. Watch
-for the golden flash showing where the shot is headed, then **swipe toward
-it to dive** (swipe higher to reach high balls) — or **tap** to stand your
-ground for a shot down the middle. React fast: dive early and you're at
-full stretch when the ball arrives.
+**As the goalkeeper**, guard the net while the rival striker runs up.
+**Hold and lean** the keeper toward your finger, then release to spring
+into the dive (higher finger = higher dive), push up with no lean to jump
+for high balls, or tap to stand tall. Watch for the golden flash showing
+where the shot is headed.
 
-Best-of-5 shootout, sudden death if level. Win the **Quarterfinal**,
-**Semifinal**, and the **World Cup Final** to lift the trophy. Opponents
-shoot harder and place better (and their keeper reads your shots better)
-every round.
+**🌍 Online Duel** — real head-to-head across two phones. One player
+creates a match and shares the 5-letter code (or the invite link); the
+other joins. Fixed roles per half: the host takes 5 kicks while the guest
+keeps goal, then roles swap; sudden death alternates single kicks if
+level. The connection is phone-to-phone WebRTC (PeerJS) — the keeper's
+phone referees each kick, and dives replay on the striker's screen on
+their original timeline, so network lag hides inside the celebrations.
+Rematches swap who shoots first.
+
+Solo modes run a three-match cup: win the **Quarterfinal**, **Semifinal**,
+and the **World Cup Final** to lift the trophy, with opponents shooting
+harder and keepers reading you better every round. All shootouts are
+best-of-5 with sudden death.
 
 ## Tech notes
 
