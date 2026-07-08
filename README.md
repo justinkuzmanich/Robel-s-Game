@@ -1,4 +1,4 @@
-# ⚽ World Cup Striker
+# ⚽ Robel's World Cup Striker
 
 A quick, casual **World Cup penalty shootout** you can pick up in seconds. Built for
 mobile — flick the screen to shoot, beat the keeper, win the cup.
