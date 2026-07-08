@@ -232,10 +232,14 @@ function makeCanvasTex(w, h, draw) {
     const post = new THREE.Mesh(postGeo, frameMat);
     post.position.set(s * GOAL_W, GOAL_H / 2, 0);
     scene.add(post);
-    const back = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 2.6, 8), frameMat);
-    back.position.set(s * GOAL_W, GOAL_H / 2 - 0.1, -1.1);
-    back.rotation.x = Math.PI / 2.6;
-    scene.add(back);
+    // box frame: vertical back post + top rail running straight back
+    const backPost = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, GOAL_H, 8), frameMat);
+    backPost.position.set(s * GOAL_W, GOAL_H / 2, -1.9);
+    scene.add(backPost);
+    const topRail = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.9, 8), frameMat);
+    topRail.rotation.x = Math.PI / 2;
+    topRail.position.set(s * GOAL_W, GOAL_H, -0.95);
+    scene.add(topRail);
   }
   const bar = new THREE.Mesh(new THREE.CylinderGeometry(POST_R, POST_R, GOAL_W * 2 + POST_R * 2, 10), frameMat);
   bar.rotation.z = Math.PI / 2;
@@ -260,20 +264,19 @@ function makeCanvasTex(w, h, draw) {
     scene.add(m);
     return m;
   };
-  // the roof net hangs from the crossbar (y=GOAL_H at z=0) down to the top of
-  // the back net (y=2.29 at z=-1.9) — sized and angled so the edges actually meet
-  const roofLen = Math.hypot(GOAL_H - 2.29, 1.9);
-  const roofTilt = Math.PI / 2 - Math.atan2(GOAL_H - 2.29, 1.9); // top edge forward, on the bar
+  // box net, all 90° angles: a flat roof at crossbar height running straight
+  // back, a vertical back wall, and rectangular sides — every edge meets flush
+  const NET_D = 1.9; // net depth behind the goal line
   const panels = [
-    netPanel(GOAL_W * 2, GOAL_H),                    // back
-    netPanel(GOAL_W * 2, roofLen, roofTilt),         // roof
-    netPanel(2.0, GOAL_H, 0, Math.PI / 2),           // sides
-    netPanel(2.0, GOAL_H, 0, Math.PI / 2),
+    netPanel(GOAL_W * 2, GOAL_H),                    // back wall
+    netPanel(GOAL_W * 2, NET_D, -Math.PI / 2),       // flat roof at bar height
+    netPanel(NET_D, GOAL_H, 0, Math.PI / 2),         // sides
+    netPanel(NET_D, GOAL_H, 0, Math.PI / 2),
   ];
-  panels[0].position.set(0, 2.29 - GOAL_H / 2, -1.9);
-  panels[1].position.set(0, (GOAL_H + 2.29) / 2, -0.95);
-  panels[2].position.set(-GOAL_W, GOAL_H / 2 - 0.1, -0.95);
-  panels[3].position.set(GOAL_W, GOAL_H / 2 - 0.1, -0.95);
+  panels[0].position.set(0, GOAL_H / 2, -NET_D);
+  panels[1].position.set(0, GOAL_H, -NET_D / 2);
+  panels[2].position.set(-GOAL_W, GOAL_H / 2, -NET_D / 2);
+  panels[3].position.set(GOAL_W, GOAL_H / 2, -NET_D / 2);
   window.setNetOpacity = o => panels.forEach(p => { p.material.opacity = o; });
 })();
 
