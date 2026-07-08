@@ -260,14 +260,18 @@ function makeCanvasTex(w, h, draw) {
     scene.add(m);
     return m;
   };
+  // the roof net hangs from the crossbar (y=GOAL_H at z=0) down to the top of
+  // the back net (y=2.29 at z=-1.9) — sized and angled so the edges actually meet
+  const roofLen = Math.hypot(GOAL_H - 2.29, 1.9);
+  const roofTilt = Math.PI / 2 - Math.atan2(GOAL_H - 2.29, 1.9); // top edge forward, on the bar
   const panels = [
     netPanel(GOAL_W * 2, GOAL_H),                    // back
-    netPanel(GOAL_W * 2, 2.0, -Math.PI / 2.35),      // roof
+    netPanel(GOAL_W * 2, roofLen, roofTilt),         // roof
     netPanel(2.0, GOAL_H, 0, Math.PI / 2),           // sides
     netPanel(2.0, GOAL_H, 0, Math.PI / 2),
   ];
-  panels[0].position.set(0, GOAL_H / 2 - 0.15, -1.9);
-  panels[1].position.set(0, GOAL_H - 0.35, -0.95);
+  panels[0].position.set(0, 2.29 - GOAL_H / 2, -1.9);
+  panels[1].position.set(0, (GOAL_H + 2.29) / 2, -0.95);
   panels[2].position.set(-GOAL_W, GOAL_H / 2 - 0.1, -0.95);
   panels[3].position.set(GOAL_W, GOAL_H / 2 - 0.1, -0.95);
   window.setNetOpacity = o => panels.forEach(p => { p.material.opacity = o; });
