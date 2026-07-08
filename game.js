@@ -423,17 +423,29 @@ const keeper = (function () {
   return {
     group, arms,
     jerseyMat: jersey,
-    dive: null, // {dirX, targetY, start, dur}
+    dive: null,             // {type:'dive'|'stand'|'jump', side, targetY, start, dur, bx}
+    baseX: 0,               // player-controlled shuffle position along the goal line
+    playerControlled: false, // true while YOU are the keeper: follow baseX instead of idle sway
     idleT: 0,
     reset() {
       this.dive = null;
+      this.baseX = 0;
       group.position.set(0, 0, 0.25);
       group.rotation.set(0, 0, 0);
       arms[0].rotation.z = -0.5;
       arms[1].rotation.z = 0.5;
     },
     startDive(dirX, targetY, dur) {
-      this.dive = { dirX, targetY, start: performance.now() / 1000, dur, side: Math.sign(dirX) || (Math.random() < 0.5 ? 1 : -1) };
+      this.dive = {
+        type: dirX === 0 ? 'stand' : 'dive',
+        dirX, targetY, dur,
+        start: performance.now() / 1000,
+        side: Math.sign(dirX) || (Math.random() < 0.5 ? 1 : -1),
+        bx: this.baseX, // dive launches from wherever the keeper shuffled to
+      };
+    },
+    startJump(dur) {
+      this.dive = { type: 'jump', dirX: 0, targetY: 2.4, dur, start: performance.now() / 1000, side: 0, bx: this.baseX };
     },
     progress(now) {
       if (!this.dive) return 0;
@@ -441,21 +453,32 @@ const keeper = (function () {
     },
     // analytic coverage used by the save check: a thick segment from hip to gloves
     coverage(p) {
-      if (!this.dive || this.dive.dirX === 0) {
-        return { ax: 0, ay: 0.3, bx: 0, by: 2.0, r: 0.5 };
+      const bx = this.dive ? this.dive.bx : this.baseX;
+      if (!this.dive || this.dive.type === 'stand') {
+        return { ax: bx, ay: 0.3, bx: bx, by: 2.0, r: 0.5 };
       }
       const d = this.dive;
-      const handX = d.side * (0.35 + 1.75 * p); // corners stay beatable even on a correct guess
+      if (d.type === 'jump') { // vertical leap: strong up high, beatable along the ground
+        return { ax: bx, ay: lerp(0.5, 1.1, p), bx: bx, by: lerp(2.0, 2.6, p), r: 0.5 };
+      }
+      const handX = bx + d.side * (0.35 + 1.75 * p); // corners stay beatable even on a correct guess
       const handY = clamp(lerp(1.7, d.targetY, p), 0.25, 2.35);
-      const hipX = d.side * (0.15 + 0.95 * p);
+      const hipX = bx + d.side * (0.15 + 0.95 * p);
       const hipY = lerp(0.95, Math.max(0.45, d.targetY * 0.45), p);
       return { ax: hipX, ay: hipY, bx: handX, by: handY, r: 0.45 };
     },
     update(now, dt) {
-      if (this.dive && this.dive.dirX === 0) { // standing his ground: arms up, small hop
+      if (this.dive && this.dive.type === 'jump') { // vertical leap, arms high
         const p = this.progress(now);
         const e = 1 - Math.pow(1 - p, 2.2);
-        group.position.x = lerp(group.position.x, 0, 0.3);
+        group.position.x = this.dive.bx;
+        group.position.y = Math.sin(Math.min(p, 1) * Math.PI) * 0.95;
+        arms[0].rotation.z = lerp(-0.5, -2.8, e);
+        arms[1].rotation.z = lerp(0.5, 2.8, e);
+      } else if (this.dive && this.dive.type === 'stand') { // standing his ground: arms up, small hop
+        const p = this.progress(now);
+        const e = 1 - Math.pow(1 - p, 2.2);
+        group.position.x = lerp(group.position.x, this.dive.bx, 0.3);
         group.position.y = Math.sin(Math.min(p, 1) * Math.PI) * 0.22;
         arms[0].rotation.z = lerp(-0.5, -2.7, e);
         arms[1].rotation.z = lerp(0.5, 2.7, e);
@@ -463,13 +486,17 @@ const keeper = (function () {
         const p = this.progress(now);
         const e = 1 - Math.pow(1 - p, 2.2); // ease-out
         const d = this.dive;
-        group.position.x = d.side * 1.55 * e;
+        group.position.x = d.bx + d.side * 1.55 * e;
         group.position.y = Math.sin(Math.min(p, 1) * Math.PI) * clamp(d.targetY - 0.6, 0.05, 0.85);
         group.rotation.z = -d.side * lerp(0, clamp(1.55 - d.targetY * 0.3, 0.9, 1.5), e);
         arms[d.side > 0 ? 1 : 0].rotation.z = d.side * lerp(0.5, 2.6, e);
         arms[d.side > 0 ? 0 : 1].rotation.z = -d.side * lerp(0.5, 1.4, e);
+      } else if (this.playerControlled) {
+        // you are the keeper: shuffle toward your finger, quick and snappy
+        group.position.x = lerp(group.position.x, this.baseX, Math.min(1, dt * 18));
+        group.position.y = Math.abs(Math.sin(group.position.x * 4)) * 0.02;
       } else {
-        // idle: sway side to side, tiny bounce
+        // AI idle: sway side to side, tiny bounce
         this.idleT += dt;
         group.position.x = Math.sin(this.idleT * 1.7) * 0.22;
         group.position.y = Math.abs(Math.sin(this.idleT * 3.4)) * 0.045;
@@ -809,17 +836,36 @@ function aimFromSwipe() {
 
 const canDive = () => (G.state === 'defend' || G.state === 'defend-ready') && !keeper.dive;
 
+// keeper cam faces the pitch, so screen-left is world +x
+const SHUFFLE_RANGE = 3.2;
+const screenToKeeperX = fx => clamp(-((fx / window.innerWidth) * 2 - 1) * 3.5, -SHUFFLE_RANGE, SHUFFLE_RANGE);
+
+// release-flick velocity over the last ~90ms of the gesture, px/ms (vy > 0 = upward)
+function flickOf(pts) {
+  const last = pts[pts.length - 1];
+  let i = pts.length - 1;
+  while (i > 0 && last.t - pts[i - 1].t < 90) i--;
+  const a = pts[i];
+  const dt = Math.max(1, last.t - a.t);
+  return { vx: (last.x - a.x) / dt, vy: (a.y - last.y) / dt };
+}
+
 function onPointerDown(e) {
   if (swipe.active) return;
   if (G.state !== 'await' && !canDive()) return;
   swipe.active = true;
   swipe.id = e.pointerId;
   swipe.points = [{ x: e.clientX, y: e.clientY, t: performance.now() }];
+  if (canDive()) keeper.baseX = screenToKeeperX(e.clientX); // grab the keeper right away
 }
 function onPointerMove(e) {
   if (!swipe.active || e.pointerId !== swipe.id) return;
   swipe.points.push({ x: e.clientX, y: e.clientY, t: performance.now() });
   if (swipe.points.length > 64) swipe.points.shift();
+  if (canDive()) { // dragging shuffles the keeper along the line in real time
+    keeper.baseX = screenToKeeperX(e.clientX);
+    return;
+  }
   if (G.state !== 'await') return;
   // live aim reticle uses the same mapping as the shot itself
   const t = aimTarget(swipe.points[0], { x: e.clientX, y: e.clientY });
@@ -837,17 +883,18 @@ function onPointerUp(e) {
     if (first.y - last.y < window.innerHeight * 0.04) return; // must swipe upward
     takeShot(aimFromSwipe());
   } else if (canDive() && pts.length >= 1) {
-    const first = pts[0], last = pts[pts.length - 1];
-    const dx = last.x - first.x, dy = first.y - last.y;
     G.firstDiveTaken = true;
     el('hint').classList.add('hidden');
+    const { vx, vy } = flickOf(pts);
+    const speed = Math.hypot(vx, vy);
+    if (speed < 0.25) return; // gentle release: stay on your feet where you stand
     vibrate(20);
-    if (Math.hypot(dx, dy) < window.innerHeight * 0.03) {
-      keeper.startDive(0, 1.0, 0.36); // tap: stand tall in the middle
+    if (vy > 0.3 && vy > Math.abs(vx) * 1.3) {
+      keeper.startJump(0.34); // flick straight up: leap for the high ball
     } else {
-      const side = dx < 0 ? 1 : -1; // the camera faces the pitch, so screen-left is world +x
-      const targetY = clamp(0.5 + (dy / (window.innerHeight * 0.28)) * 1.7, 0.3, 2.3);
-      keeper.startDive(side, targetY, 0.36);
+      const side = vx < 0 ? 1 : -1; // flick sideways: dive from where you shuffled to
+      const targetY = clamp(0.6 + vy * 2.2, 0.4, 2.3);
+      keeper.startDive(side, targetY, 0.34);
     }
   }
 }
@@ -943,8 +990,9 @@ function aiAim() {
   return { target: new THREE.Vector3(x, y, 0), power, curve: rand(-0.55, 0.55) };
 }
 
-const PLAYER_REACH = 1.3;   // your gloves stretch further than the AI keeper's
-const PLAYER_RADIUS = 0.18; // plus a forgiveness margin around your dive line
+// with direct positioning the player is far more capable, so the reach bonus is modest
+const PLAYER_REACH = 1.12;
+const PLAYER_RADIUS = 0.08;
 
 function aiKick() {
   const myShot = ++shotSeq;
@@ -969,7 +1017,7 @@ async function defendRound(token) {
   swipe.active = false; // discard any gesture that started before this round
   G.state = 'defend-ready';
   if (!G.firstDiveTaken) {
-    el('hint').querySelector('.txt').textContent = 'Swipe to dive';
+    el('hint').querySelector('.txt').textContent = 'Drag to move · flick to dive · flick up to jump';
     el('hint').classList.remove('hidden');
   }
   await sleep(rand(600, 1300));
@@ -1028,6 +1076,7 @@ async function runMatch(token) {
     ? (G.playerTeam.color === 0xffffff ? G.playerTeam.alt : G.playerTeam.color)
     : G.oppTeam.alt);
   striker.show(keeperMode);
+  keeper.playerControlled = keeperMode;
   striker.jerseyMat.color.set(G.oppTeam.color === 0xffffff ? G.oppTeam.alt : G.oppTeam.color);
   const shooter = keeperMode ? G.oppTeam : G.playerTeam;
   trail.material.color.set(shooter.color === 0xffffff ? shooter.alt : shooter.color);
@@ -1173,8 +1222,9 @@ function showTitle() {
   el('hud').classList.add('hidden');
   Ball.placeOnSpot();
   keeper.reset();
+  keeper.playerControlled = false;
   striker.show(false);
-  camera.position.copy(camBase());
+  applyCameraMode();
   camLook.set(0, 1.4, 0);
   el('title-screen').classList.remove('hidden');
 }
@@ -1185,7 +1235,7 @@ function showVs() {
   Ball.placeOnSpot();
   keeper.reset();
   striker.reset();
-  camera.position.copy(camBase());
+  applyCameraMode();
   camLook.set(0, 1.4, G.mode === 'keeper' ? 8 : 0);
   el('vs-stage').textContent = STAGES[G.stageIdx].name;
   el('vs-pflag').textContent = G.playerTeam.flag;
@@ -1245,8 +1295,15 @@ function startTournament(mode) {
 function camBase() {
   const squeeze = camera.aspect < 0.62 ? (0.62 - camera.aspect) : 0;
   return G.mode === 'keeper'
-    ? new THREE.Vector3(0, 3.7, -3.6 - squeeze * 4) // above the crossbar, looking down the pitch
+    ? new THREE.Vector3(0, 4.6, -12 - squeeze * 6) // high behind the goal: full frame + both posts in view
     : new THREE.Vector3(0, 2.3, SPOT_Z + 4.6 + squeeze * 6);
+}
+
+// keeper mode uses a wider lens so the whole goal fits on a portrait screen
+function applyCameraMode() {
+  camera.fov = G.mode === 'keeper' ? 68 : 58;
+  camera.updateProjectionMatrix();
+  camera.position.copy(camBase());
 }
 
 function onResize() {
