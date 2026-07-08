@@ -241,6 +241,11 @@ function makeCanvasTex(w, h, draw) {
     topRail.position.set(s * GOAL_W, GOAL_H, -0.95);
     scene.add(topRail);
   }
+  // back top rail: closes the box frame and makes the roof's rear edge read clearly
+  const backRail = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, GOAL_W * 2, 10), frameMat);
+  backRail.rotation.z = Math.PI / 2;
+  backRail.position.set(0, GOAL_H, -1.9);
+  scene.add(backRail);
   const bar = new THREE.Mesh(new THREE.CylinderGeometry(POST_R, POST_R, GOAL_W * 2 + POST_R * 2, 10), frameMat);
   bar.rotation.z = Math.PI / 2;
   bar.position.set(0, GOAL_H, 0);
@@ -248,7 +253,7 @@ function makeCanvasTex(w, h, draw) {
 
   const netTex = makeCanvasTex(256, 256, (g, w, h) => {
     g.clearRect(0, 0, w, h);
-    g.strokeStyle = 'rgba(255,255,255,.55)'; g.lineWidth = 1.5;
+    g.strokeStyle = 'rgba(255,255,255,.6)'; g.lineWidth = 2.5;
     for (let i = 0; i <= 16; i++) {
       g.beginPath(); g.moveTo((i / 16) * w, 0); g.lineTo((i / 16) * w, h); g.stroke();
       g.beginPath(); g.moveTo(0, (i / 16) * h); g.lineTo(w, (i / 16) * h); g.stroke();
@@ -256,10 +261,12 @@ function makeCanvasTex(w, h, draw) {
   });
   netTex.wrapS = netTex.wrapT = THREE.RepeatWrapping;
   const netMat = new THREE.MeshBasicMaterial({ map: netTex, transparent: true, side: THREE.DoubleSide, depthWrite: false });
+  const maxAniso = renderer.capabilities.getMaxAnisotropy();
   const netPanel = (w, h, rx, ry) => {
     const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), netMat.clone());
     m.material.map = netTex.clone();
     m.material.map.repeat.set(w / 0.9, h / 0.9);
+    m.material.map.anisotropy = maxAniso; // keep the mesh visible at grazing angles (the roof especially)
     m.rotation.x = rx || 0; m.rotation.y = ry || 0;
     scene.add(m);
     return m;
