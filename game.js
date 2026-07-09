@@ -399,38 +399,73 @@ function blobShadow(size) {
 const ballShadow = blobShadow(0.9);
 const keeperShadow = blobShadow(2.2);
 
-// ---- low-poly goalkeeper
-const keeper = (function () {
+// ---- shared humanoid rig: rounded capsule limbs, natural elbow bends, kit details.
+// facing: +1 the player looks toward +z (keeper), -1 toward -z (striker).
+// Returns the same pivot structure the animations drive: {group, arms, kickHip, jerseyMat}.
+function buildPlayerRig({ jersey = 0xff8c1a, shorts = 0x15181e, skin = 0xd9a06b, hair = 0x241708,
+  gloves = null, facing = 1, kickLeg = false } = {}) {
   const group = new THREE.Group();
-  const jersey = new THREE.MeshLambertMaterial({ color: 0xff8c1a });
-  const skin = new THREE.MeshLambertMaterial({ color: 0xd9a06b });
-  const dark = new THREE.MeshLambertMaterial({ color: 0x15181e });
-  const glove = new THREE.MeshLambertMaterial({ color: 0xf2f2f2 });
+  const jerseyMat = new THREE.MeshLambertMaterial({ color: jersey });
+  const shortsMat = new THREE.MeshLambertMaterial({ color: shorts });
+  const skinMat = new THREE.MeshLambertMaterial({ color: skin });
+  const hairMat = new THREE.MeshLambertMaterial({ color: hair });
+  const sockMat = new THREE.MeshLambertMaterial({ color: 0xf2f2f2 });
+  const darkMat = new THREE.MeshLambertMaterial({ color: 0x191919 });
+  const handMat = gloves ? new THREE.MeshLambertMaterial({ color: gloves }) : skinMat;
 
-  const add = (geo, mat, x, y, z) => {
+  const add = (geo, mat, x, y, z, parent) => {
     const m = new THREE.Mesh(geo, mat);
     m.position.set(x, y, z);
-    group.add(m);
+    (parent || group).add(m);
     return m;
   };
-  for (const s of [-1, 1]) add(new THREE.BoxGeometry(0.17, 0.8, 0.2), dark, s * 0.14, 0.4, 0);
-  add(new THREE.BoxGeometry(0.5, 0.3, 0.26), dark, 0, 0.9, 0);
-  const torso = add(new THREE.BoxGeometry(0.56, 0.62, 0.3), jersey, 0, 1.34, 0);
-  add(new THREE.SphereGeometry(0.16, 12, 10), skin, 0, 1.83, 0);
-  add(new THREE.BoxGeometry(0.34, 0.1, 0.34), dark, 0, 1.95, 0); // cap
+  const leg = (s, parent, ox = 0, oy = 0) => { // thigh, sock, boot — one leg
+    add(new THREE.CapsuleGeometry(0.078, 0.3, 4, 10), skinMat, s * 0.115 + ox, 0.63 + oy, 0, parent);
+    add(new THREE.CapsuleGeometry(0.068, 0.26, 4, 10), sockMat, s * 0.115 + ox, 0.26 + oy, 0, parent);
+    add(new THREE.BoxGeometry(0.15, 0.09, 0.27), darkMat, s * 0.115 + ox, 0.05 + oy, facing * 0.05, parent);
+  };
+
+  let kickHip = null;
+  if (kickLeg) {
+    leg(-1);
+    kickHip = new THREE.Group(); // strike leg swings from the hip
+    kickHip.position.set(0.115, 0.82, 0);
+    leg(0, kickHip, 0, -0.82);
+    group.add(kickHip);
+  } else {
+    leg(-1); leg(1);
+  }
+
+  add(new THREE.CylinderGeometry(0.21, 0.23, 0.26, 12), shortsMat, 0, 0.9, 0);
+  const torso = add(new THREE.CapsuleGeometry(0.19, 0.34, 6, 14), jerseyMat, 0, 1.24, 0);
+  torso.scale.set(1.3, 1, 0.78); // shoulders
+  add(new THREE.CylinderGeometry(0.055, 0.06, 0.1, 8), skinMat, 0, 1.55, 0);   // neck
+  add(new THREE.SphereGeometry(0.135, 16, 12), skinMat, 0, 1.7, 0);            // head
+  const hairCap = add(new THREE.SphereGeometry(0.142, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.52),
+    hairMat, 0, 1.705, -facing * 0.02);
+  hairCap.rotation.x = -facing * 0.25;
+  for (const s of [-1, 1]) add(new THREE.SphereGeometry(0.016, 6, 6), darkMat, s * 0.05, 1.72, facing * 0.115); // eyes
+
   const arms = [];
   for (const s of [-1, 1]) {
     const pivot = new THREE.Group();
-    pivot.position.set(s * 0.33, 1.58, 0);
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.62, 0.13), jersey);
-    arm.position.y = -0.28;
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 8), glove);
-    hand.position.y = -0.62;
-    pivot.add(arm, hand);
+    pivot.position.set(s * 0.27, 1.42, 0);
+    const upper = add(new THREE.CapsuleGeometry(0.062, 0.2, 4, 10), jerseyMat, 0, -0.13, 0, pivot);
+    const fore = add(new THREE.CapsuleGeometry(0.054, 0.17, 4, 10), skinMat, 0, -0.31, facing * 0.05, pivot);
+    fore.rotation.x = facing * 0.4; // relaxed elbow bend
+    add(new THREE.SphereGeometry(0.075, 10, 8), handMat, 0, -0.42, facing * 0.11, pivot);
     pivot.rotation.z = s * 0.5; // ready stance, arms out
     group.add(pivot);
     arms.push(pivot);
   }
+  return { group, arms, kickHip, jerseyMat };
+}
+
+// ---- goalkeeper
+const keeper = (function () {
+  const rig = buildPlayerRig({ jersey: 0xff8c1a, gloves: 0xf2f2f2, facing: 1, skin: 0xa96f45 });
+  const group = rig.group, arms = rig.arms, jersey = rig.jerseyMat;
+  group.scale.setScalar(1.06); // keepers are big
   group.position.set(0, 0, 0.25);
   scene.add(group);
 
@@ -527,28 +562,10 @@ const keeper = (function () {
 
 // ---- opposing striker (visible in keeper mode): runs up and strikes the ball
 const striker = (function () {
-  const group = new THREE.Group();
-  const jersey = new THREE.MeshLambertMaterial({ color: 0x3f6cff });
-  const dark = new THREE.MeshLambertMaterial({ color: 0x15181e });
-  const skin = new THREE.MeshLambertMaterial({ color: 0xc98d5f });
-  const add = (geo, mat, x, y, z, parent) => {
-    const m = new THREE.Mesh(geo, mat);
-    m.position.set(x, y, z);
-    (parent || group).add(m);
-    return m;
-  };
-  add(new THREE.BoxGeometry(0.16, 0.78, 0.16), dark, -0.12, 0.39, 0);
-  const kickHip = new THREE.Group(); // pivot so the strike leg can swing
-  kickHip.position.set(0.13, 0.82, 0);
-  add(new THREE.BoxGeometry(0.16, 0.78, 0.16), dark, 0, -0.39, 0, kickHip);
-  group.add(kickHip);
-  add(new THREE.BoxGeometry(0.46, 0.28, 0.24), dark, 0, 0.92, 0);
-  add(new THREE.BoxGeometry(0.52, 0.58, 0.28), jersey, 0, 1.32, 0);
-  add(new THREE.SphereGeometry(0.15, 12, 10), skin, 0, 1.78, 0);
-  for (const s of [-1, 1]) {
-    const arm = add(new THREE.BoxGeometry(0.12, 0.56, 0.12), jersey, s * 0.35, 1.28, 0);
-    arm.rotation.z = s * 0.35;
-  }
+  const rig = buildPlayerRig({ jersey: 0x3f6cff, facing: -1, kickLeg: true, skin: 0xdba372, hair: 0x11100e });
+  const group = rig.group, jersey = rig.jerseyMat, kickHip = rig.kickHip;
+  rig.arms[0].rotation.z = -0.35; // relaxed at his sides for the run-up
+  rig.arms[1].rotation.z = 0.35;
   group.visible = false;
   scene.add(group);
 

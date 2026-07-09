@@ -160,6 +160,17 @@ stalls (which also protects real matches when a phone briefly dims). Final
 test run: a full 5–4 duel with halftime swap, complementary win/lose
 screens, and both phones' records perfectly mirrored.
 
+## 12. Realistic players
+
+Replaced the box-figure players with a shared humanoid rig, still built
+entirely from primitives at boot (no assets): rounded capsule limbs with
+natural elbow bends, real proportions (shoulders, neck, hips), kits with
+contrasting shorts, socks and boots, skin tones, hair, eyes, and keeper
+gloves. The keeper and striker both come from one `buildPlayerRig` factory
+with a facing parameter and an optional strike-leg pivot, and the rig keeps
+the exact pivot structure the existing animations drive — so every dive,
+jump, lean, and run-up worked unchanged. All three modes re-verified.
+
 ---
 
 ## Where things stand
