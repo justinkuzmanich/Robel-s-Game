@@ -518,30 +518,42 @@ const keeper = (function () {
       const hipY = lerp(0.95, Math.max(0.45, d.targetY * 0.45), p);
       return { ax: hipX, ay: hipY, bx: handX, by: handY, r: 0.45 };
     },
+    // 0→1 over half a second, starting a beat after the action lands: the get-up
+    recovery(now) {
+      const t = now - this.dive.start - this.dive.dur - 0.45;
+      const r = clamp(t / 0.5, 0, 1);
+      return r * r * (3 - 2 * r); // smoothstep
+    },
     update(now, dt) {
       if (this.dive && this.dive.type === 'jump') { // vertical leap, arms high
         const p = this.progress(now);
         const e = 1 - Math.pow(1 - p, 2.2);
+        const re = this.recovery(now); // arms come back down after landing
         group.position.x = this.dive.bx;
         group.position.y = Math.sin(Math.min(p, 1) * Math.PI) * 0.95;
-        arms[0].rotation.z = lerp(-0.5, -2.8, e);
-        arms[1].rotation.z = lerp(0.5, 2.8, e);
+        arms[0].rotation.z = lerp(lerp(-0.5, -2.8, e), -0.5, re);
+        arms[1].rotation.z = lerp(lerp(0.5, 2.8, e), 0.5, re);
       } else if (this.dive && this.dive.type === 'stand') { // standing his ground: arms up, small hop
         const p = this.progress(now);
         const e = 1 - Math.pow(1 - p, 2.2);
+        const re = this.recovery(now);
         group.position.x = lerp(group.position.x, this.dive.bx, 0.3);
         group.position.y = Math.sin(Math.min(p, 1) * Math.PI) * 0.22;
-        arms[0].rotation.z = lerp(-0.5, -2.7, e);
-        arms[1].rotation.z = lerp(0.5, 2.7, e);
+        arms[0].rotation.z = lerp(lerp(-0.5, -2.7, e), -0.5, re);
+        arms[1].rotation.z = lerp(lerp(0.5, 2.7, e), 0.5, re);
       } else if (this.dive) {
         const p = this.progress(now);
         const e = 1 - Math.pow(1 - p, 2.2); // ease-out
         const d = this.dive;
+        // after the dive lands, push up onto one knee instead of lying on the turf
+        const re = this.recovery(now);
+        const rotFull = clamp(1.55 - d.targetY * 0.3, 0.9, 1.5);
         group.position.x = d.bx + d.side * 1.55 * e;
-        group.position.y = Math.sin(Math.min(p, 1) * Math.PI) * clamp(d.targetY - 0.6, 0.05, 0.85);
-        group.rotation.z = -d.side * lerp(0, clamp(1.55 - d.targetY * 0.3, 0.9, 1.5), e);
-        arms[d.side > 0 ? 1 : 0].rotation.z = d.side * lerp(0.5, 2.6, e);
-        arms[d.side > 0 ? 0 : 1].rotation.z = -d.side * lerp(0.5, 1.4, e);
+        group.position.y = Math.sin(Math.min(p, 1) * Math.PI) * clamp(d.targetY - 0.6, 0.05, 0.85) - re * 0.26;
+        group.rotation.z = -d.side * lerp(rotFull * e, 0.18, re);
+        group.rotation.x = re * 0.42; // kneeling lean, weight on the front knee
+        arms[d.side > 0 ? 1 : 0].rotation.z = lerp(d.side * lerp(0.5, 2.6, e), d.side * 0.5, re);
+        arms[d.side > 0 ? 0 : 1].rotation.z = lerp(-d.side * lerp(0.5, 1.4, e), -d.side * 0.5, re);
       } else if (this.playerControlled) {
         // you are the keeper: the body leans with your finger, coiled to spring
         const k = Math.min(1, dt * 14);
